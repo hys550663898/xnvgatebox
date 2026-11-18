@@ -217,7 +217,15 @@ func main() {
 	mux.HandleFunc("/api/update/apply", updater.apply)
 	mux.HandleFunc("/api/update/status", updater.status)
 
-	log.Printf("管理界面: http://<本机IP>%s%s/", webCfg.listenAddrString(), currentBasePath())
+	if webCfg.HTTPS {
+		host := webCfg.Domain
+		if host == "" {
+			host = "<本机IP>"
+		}
+		log.Printf("管理界面: https://%s:%d%s/", host, webCfg.Port, currentBasePath())
+	} else {
+		log.Printf("管理界面: http://<本机IP>%s%s/", webCfg.listenAddrString(), currentBasePath())
+	}
 	if base, fixed, err := fixedSlotPort(1); fixed && err == nil {
 		log.Printf("Exit Slot 固定端口基址为 %d（slot 1 使用 127.0.0.1:%d）", base, base)
 	} else {
@@ -420,6 +428,10 @@ func apiSettings(auth *Auth, srv *webServer) http.HandlerFunc {
 			"has_password":     true,
 			"residential_only": cfg.residentialOnly(),
 			"version":          version,
+			"https":            cfg.HTTPS,
+			"domain":           cfg.Domain,
+			"cert_file":        cfg.CertFile,
+			"key_file":         cfg.KeyFile,
 		})
 	}
 }

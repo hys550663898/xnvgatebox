@@ -26,6 +26,15 @@ type WebSettings struct {
 	// SubToken 是订阅地址里的口令。订阅要免登录才能被客户端拉取，
 	// 所以这串就是它唯一的门槛，等同于密码，不要外传。
 	SubToken string `json:"sub_token,omitempty"`
+	// HTTPS 为真时管理界面用 TLS 监听（证书见 CertFile/KeyFile）。
+	HTTPS bool `json:"https,omitempty"`
+	// Domain 是对外访问用的域名（可空）。只影响展示与跳转的管理地址，
+	// TLS 本身认的是证书里写的域名。
+	Domain string `json:"domain,omitempty"`
+	// CertFile / KeyFile 是 VPS 本机已有的证书与私钥文件路径，
+	// 例如 3x-ui 签发的那套；程序只读不签发，续期后重启服务生效。
+	CertFile string `json:"cert_file,omitempty"`
+	KeyFile  string `json:"key_file,omitempty"`
 }
 
 // residentialOnly 返回"只用家宽"是否开启。没配过时默认开：
@@ -113,6 +122,14 @@ func decodeWebSettings(blob []byte, defaultPort int) (WebSettings, error) {
 		return WebSettings{}, err
 	}
 	s.ListenAddr = addr
+	// 读盘时只校验域名格式，不断言证书可用：证书被误删/过期时服务仍要
+	// 能起来并回退 HTTP，而不是把管理界面锁死（见 webServer.serve）。
+	if err := validateDomainName(s.Domain); err != nil {
+		return WebSettings{}, err
+	}
+	s.Domain = strings.TrimSpace(s.Domain)
+	s.CertFile = strings.TrimSpace(s.CertFile)
+	s.KeyFile = strings.TrimSpace(s.KeyFile)
 	return *s, nil
 }
 

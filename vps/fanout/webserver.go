@@ -27,10 +27,20 @@ func newWebServer(h http.Handler) *webServer {
 }
 
 // serve 用当前 WebSettings 起第一个监听并阻塞。返回时说明监听彻底退出。
+// HTTPS 监听起不来（证书被删/过期/路径改名）时回退 HTTP 并打日志：
+// 保存时证书是校验过的，走到这里多半是盘上文件后来变了，不能因此
+// 把管理界面彻底锁死。
 func (s *webServer) serve() error {
 	cfg := getWebSettings()
 	if err := s.reload(cfg); err != nil {
-		return err
+		if !cfg.HTTPS {
+			return err
+		}
+		log.Printf("HTTPS 监听启动失败: %v；已回退为 HTTP，请到设置里检查证书路径", err)
+		cfg.HTTPS = false
+		if err := s.reload(cfg); err != nil {
+			return err
+		}
 	}
 	// 主 goroutine 就地阻塞，等监听被 reload 或退出替换。
 	// 这里靠一个永不返回的 select 挂住：真正的 Serve 在 reload 里各自的 goroutine 跑。

@@ -1522,6 +1522,34 @@
                   <label for="settingListen">监听地址</label
                   ><input id="settingListen" required />
                 </div>
+                <div class="field">
+                  <label for="settingHttps">访问协议</label
+                  ><select id="settingHttps">
+                    <option value="false">HTTP（明文）</option>
+                    <option value="true">HTTPS（用下方证书）</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="settingDomain">访问域名（可留空）</label
+                  ><input
+                    id="settingDomain"
+                    placeholder="如 panel.example.com"
+                  />
+                </div>
+                <div class="field full">
+                  <label for="settingCert">证书文件路径（VPS 本机）</label
+                  ><input
+                    id="settingCert"
+                    placeholder="/root/cert/域名/fullchain.pem"
+                  />
+                </div>
+                <div class="field full">
+                  <label for="settingKey">私钥文件路径（VPS 本机）</label
+                  ><input
+                    id="settingKey"
+                    placeholder="/root/cert/域名/privkey.pem"
+                  />
+                </div>
                 <div class="field full">
                   <label for="settingPath">管理路径</label
                   ><input id="settingPath" required />
@@ -1536,7 +1564,13 @@
                 </div>
               </div>
               <button class="primary" type="submit">保存设置</button>
-              <p><small>改变端口或路径后，请使用新的管理地址登录。</small></p>
+              <p>
+                <small
+                  >改变端口、路径或协议后，请使用新的管理地址登录。HTTPS
+                  直接使用 VPS 上已有的证书文件（可与 3x-ui
+                  共用同一套路径），保存时会校验文件存在、成对且未过期；证书续期后重启服务或重新保存本页即可生效。</small
+                >
+              </p>
             </form>
             <div class="card pad">
               <span class="mark" style="margin-bottom: 17px">×</span>
@@ -3856,6 +3890,10 @@
         $("settingPort").value = s.port;
         $("settingListen").value = s.listen_addr;
         $("settingPath").value = s.base_path;
+        $("settingHttps").value = s.https ? "true" : "false";
+        $("settingDomain").value = s.domain || "";
+        $("settingCert").value = s.cert_file || "";
+        $("settingKey").value = s.key_file || "";
         settingsLoaded = true;
       }
       $("settingsForm").onsubmit = (e) => {
@@ -3865,6 +3903,10 @@
             port: Number($("settingPort").value),
             listen_addr: $("settingListen").value.trim(),
             base_path: $("settingPath").value.trim(),
+            https: $("settingHttps").value === "true",
+            domain: $("settingDomain").value.trim(),
+            cert_file: $("settingCert").value.trim(),
+            key_file: $("settingKey").value.trim(),
           };
           if ($("settingPassword").value)
             data.password = $("settingPassword").value;
@@ -3872,6 +3914,8 @@
           $("settingPassword").value = "";
           toast("设置已保存");
           const u = new URL(location.href);
+          u.protocol = r.https ? "https:" : "http:";
+          if (r.domain) u.hostname = r.domain;
           u.port = String(r.port);
           u.pathname = r.base_path + "/";
           if (u.href !== location.href) location.href = u.href;
