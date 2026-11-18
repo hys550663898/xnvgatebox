@@ -1,6 +1,6 @@
 # xnvgatebox VPS Standalone
 
-管理进程、内置 Xray、共享候选池都在 VPS 本地运行，无需额外安装 3x-ui。要求 Linux amd64、root 和 systemd；统一安装入口支持 Debian 12/13、Ubuntu 22.04/24.04 与 CentOS Stream 9/10。各系统自动测试与真实 VPS 验收范围见 [系统兼容性](../docs/LINUX_SUPPORT.md)。
+管理进程、内置 Xray、共享候选池都在 VPS 本地运行，无需额外安装 3x-ui。要求 Linux amd64 或 arm64、root 和 systemd；统一安装入口支持 Debian 12/13、Ubuntu 22.04/24.04 与 CentOS Stream 9/10。各系统自动测试与真实 VPS 验收范围见 [系统兼容性](../docs/LINUX_SUPPORT.md)。
 
 ## 安装与升级（v0.9.6）
 
@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/hanhaoops/xnvgatebox/v0.9.6/vps/ins
 
 备份仅覆盖本项目受管文件，不是整机或 3x-ui 备份；重装前请另存到本机。见 [重装准备](../docs/BACKUP_REINSTALL.md)。
 
-离线包：`bash vps/install.sh --mode vps --package /path/xnvgatebox-linux-amd64.tar.gz`，相邻目录须有 `checksums.txt`。完整包包含管理器、Xray、Python 源码、脚本和服务，不只替换一个二进制。
+离线包：`bash vps/install.sh --mode vps --package /path/xnvgatebox-linux-<架构>.tar.gz`（架构为 amd64 或 arm64，须与本机一致），相邻目录须有 `checksums.txt`。完整包包含管理器、Xray、Python 源码、脚本和服务，不只替换一个二进制。
 
 更新停止本项目服务后备份 `/var/lib/xnvgatebox`、`/usr/local/lib/xnvgatebox`、`/etc/xnvgatebox`、本项目两个命令、环境文件和三个 systemd 单元至 `/var/backups/xnvgatebox/install-<任务编号>/project.tar.gz`，均为私有文件。配置预检后替换完整程序，通过本地登录检查实际运行版本和内置后端。失败恢复原文件及服务启停/开机状态；恢复未完成保留 `/var/lib/xnvgatebox-deploy/transaction.json`，下次安装先恢复。状态与恢复工具独立保存于该目录，不随程序替换丢失。系统依赖包不在回滚范围内，3x-ui 不在受管路径内。
 

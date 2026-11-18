@@ -34,24 +34,31 @@ jobs:
           assert r['conclusion']=='success' and r['workflowName']=='VPS tests and package'
           pathlib.Path('source-sha').write_text(r['headSha'])
           PYCODE
-          gh run download "$RUN_ID" -n xnvgatebox-linux-amd64 -D package
-          (cd package && sha256sum --check checksums.txt)
+          gh run download "$RUN_ID" -n xnvgatebox-linux-amd64 -D package-amd64
+          gh run download "$RUN_ID" -n xnvgatebox-linux-arm64 -D package-arm64
+          (cd package-amd64 && sha256sum --check checksums.txt)
+          (cd package-arm64 && sha256sum --check checksums.txt)
           python3 - <<'PYCODE'
           import hashlib,json,os,pathlib,tarfile
-          with tarfile.open('package/xnvgatebox-linux-amd64.tar.gz') as t:
-              members=t.getmembers()
-              assert all(m.isfile() or m.isdir() for m in members), 'Unexpected archive entry'
-              assert all(not pathlib.PurePosixPath(m.name).is_absolute() and '..' not in pathlib.PurePosixPath(m.name).parts for m in members), 'Unsafe archive path'
-              assert len({m.name for m in members})==len(members), 'Duplicate archive entry'
-              files={m.name:t.extractfile(m).read() for m in members if m.isfile()}
-          sums=json.loads(files['package-sha256.json'])
-          assert set(sums)==set(files)-{'package-sha256.json'}, 'Incomplete package manifest'
-          assert all(hashlib.sha256(files[n]).hexdigest()==h for n,h in sums.items()), 'Package member mismatch'
-          build=json.loads(files['BUILD.json'])
-          assert files['VERSION'].decode().strip()==os.environ['RELEASE_TAG']==build['version'], 'Package version does not match release tag'
-          assert build['git_head']==pathlib.Path('source-sha').read_text().strip(), 'Package is from another commit'
-          assert build['source_dirty'] is False and build['manager_origin']=='built_from_source', 'Release requires a clean source build'
+          for arch in ('amd64','arm64'):
+              with tarfile.open('package-%s/xnvgatebox-linux-%s.tar.gz' % (arch,arch)) as t:
+                  members=t.getmembers()
+                  assert all(m.isfile() or m.isdir() for m in members), 'Unexpected archive entry'
+                  assert all(not pathlib.PurePosixPath(m.name).is_absolute() and '..' not in pathlib.PurePosixPath(m.name).parts for m in members), 'Unsafe archive path'
+                  assert len({m.name for m in members})==len(members), 'Duplicate archive entry'
+                  files={m.name:t.extractfile(m).read() for m in members if m.isfile()}
+              sums=json.loads(files['package-sha256.json'])
+              assert set(sums)==set(files)-{'package-sha256.json'}, 'Incomplete package manifest'
+              assert all(hashlib.sha256(files[n]).hexdigest()==h for n,h in sums.items()), 'Package member mismatch'
+              build=json.loads(files['BUILD.json'])
+              assert files['VERSION'].decode().strip()==os.environ['RELEASE_TAG']==build['version'], 'Package version does not match release tag'
+              assert build['git_head']==pathlib.Path('source-sha').read_text().strip(), 'Package is from another commit'
+              assert build['source_dirty'] is False and build['manager_origin']=='built_from_source', 'Release requires a clean source build'
+              assert build.get('arch')==arch, 'Package architecture mismatch'
           PYCODE
+          mkdir upload
+          cp package-amd64/xnvgatebox-linux-amd64.tar.gz package-arm64/xnvgatebox-linux-arm64.tar.gz upload/
+          cat package-amd64/checksums.txt package-arm64/checksums.txt > upload/checksums.txt
           if ! gh release view "$RELEASE_TAG" --json isDraft,targetCommitish > existing-release.json; then
             gh release create "$RELEASE_TAG" --target "$(cat source-sha)" --draft --title "xnvgatebox $RELEASE_TAG" --notes 'VPS Standalone. See repository README for installation and validation limits.'
             gh release view "$RELEASE_TAG" --json isDraft,targetCommitish > existing-release.json
@@ -62,5 +69,5 @@ jobs:
           assert release['isDraft'], 'Refusing to overwrite a published release'
           assert release['targetCommitish']==pathlib.Path('source-sha').read_text().strip(), 'Draft targets another commit'
           PYCODE
-          gh release upload "$RELEASE_TAG" package/xnvgatebox-linux-amd64.tar.gz package/checksums.txt --clobber
+          gh release upload "$RELEASE_TAG" upload/xnvgatebox-linux-amd64.tar.gz upload/xnvgatebox-linux-arm64.tar.gz upload/checksums.txt --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest

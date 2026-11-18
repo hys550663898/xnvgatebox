@@ -2,7 +2,7 @@
 
 ## 目标系统
 
-本轮统一安装器面向 Linux x86_64、root、systemd：
+本轮统一安装器面向 Linux x86_64 与 arm64（aarch64）、root、systemd：
 
 | 系统 | 软件来源 | 当前状态 |
 | --- | --- | --- |
@@ -10,7 +10,9 @@
 | Ubuntu 22.04 / 24.04 | 发行版 APT 仓库（含 Universe） | 自动新装、更新、卸载通过 |
 | CentOS Stream 9 / 10 | 系统仓库、EPEL、固定上游 SSTP 源码 | 自动新装、更新、卸载通过；独立 VPS 待验收 |
 
-从 v0.9.0 起使用同一个安装入口，命令见 [README](../README.md#安装)。v0.8.1 及更早安装器仍只支持 Debian / Ubuntu。ARM64、CentOS 7、CentOS Linux 8、OpenVZ 等受限容器和非 systemd 系统不在本轮范围；Rocky/Alma/RHEL 尚未单独验收。
+从 v0.9.0 起使用同一个安装入口，命令见 [README](../README.md#安装)。v0.8.1 及更早安装器仍只支持 Debian / Ubuntu。CentOS 7、CentOS Linux 8、OpenVZ 等受限容器和非 systemd 系统不在本轮范围；Rocky/Alma/RHEL 尚未单独验收。
+
+自 v0.11.0 起提供 arm64（aarch64）发布包，与 amd64 使用同一个安装入口，脚本按 `uname -m` 自动选包；网页更新同样按运行架构选择对应包。arm64 的自动安装测试覆盖 Debian 12、Ubuntu 24.04 与 CentOS Stream 9（其余系统组合与 amd64 共用同一套安装逻辑，但未逐个在 arm64 上跑矩阵）；真实 ARM VPS 验收待补充。
 
 ## CentOS 依赖
 

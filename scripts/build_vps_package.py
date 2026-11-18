@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained Linux amd64 package; no tokens or runtime state."""
+"""Build a self-contained Linux package (amd64 or arm64); no tokens or runtime state."""
 import argparse
 import hashlib
 import io
@@ -29,8 +29,8 @@ def source_identity():
                 json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
 
 
-def pinned_xray_archive(pin, local=None):
-    asset = pin["assets"]["linux-x86_64"]
+def pinned_xray_archive(pin, arch, local=None):
+    asset = pin["assets"]["linux-" + {"amd64": "x86_64", "arm64": "arm64"}[arch]]
     if local is not None:
         archive = local.read_bytes()
     else:
@@ -45,6 +45,7 @@ def pinned_xray_archive(pin, local=None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", default="dev")
+    parser.add_argument("--arch", choices=("amd64", "arm64"), default="amd64")
     parser.add_argument("--manager", type=Path)
     parser.add_argument("--xray-archive", type=Path, help="Use a local archive, still verified against the release pin")
     parser.add_argument("--output", type=Path, default=ROOT / "dist")
@@ -59,9 +60,9 @@ def main():
             subprocess.run(["go", "build", "-trimpath", "-ldflags", "-s -w -X main.version=" + args.version,
                             "-o", str(stage / "bin/xnvgatebox-manager"), "."],
                            cwd=ROOT / "vps/fanout", check=True,
-                           env={**os.environ, "GOOS": "linux", "GOARCH": "amd64", "CGO_ENABLED": "0"})
+                           env={**os.environ, "GOOS": "linux", "GOARCH": args.arch, "CGO_ENABLED": "0"})
         pin = json.loads((ROOT / "config/xray-release.json").read_text())
-        archive = pinned_xray_archive(pin, args.xray_archive)
+        archive = pinned_xray_archive(pin, args.arch, args.xray_archive)
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             (stage / "bin/xray").write_bytes(z.read("xray"))
             (stage / "LICENSE.xray").write_bytes(z.read("LICENSE"))
@@ -80,13 +81,13 @@ def main():
         shutil.copy2(ROOT / "vps/fanout/LICENSE", stage / "LICENSE.reference")
         (stage / "VERSION").write_text(args.version + "\n")
         (stage / "BUILD.json").write_text(json.dumps(
-            {**source_identity(), "version": args.version, "xray_version": pin["version"],
+            {**source_identity(), "version": args.version, "xray_version": pin["version"], "arch": args.arch,
              "manager_origin": "supplied_binary" if args.manager else "built_from_source"},
             sort_keys=True, indent=2) + "\n")
         sums = {str(p.relative_to(stage)): hashlib.sha256(p.read_bytes()).hexdigest()
                 for p in stage.rglob("*") if p.is_file()}
         (stage / "package-sha256.json").write_text(json.dumps(sums, sort_keys=True, indent=2))
-        dest = args.output / "xnvgatebox-linux-amd64.tar.gz"
+        dest = args.output / ("xnvgatebox-linux-" + args.arch + ".tar.gz")
         with tarfile.open(dest, "w:gz") as t:
             for p in sorted(stage.iterdir()):
                 t.add(p, arcname=p.name)

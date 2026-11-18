@@ -2,8 +2,9 @@
 set -euo pipefail
 [[ -f /.dockerenv && $(cat /proc/1/comm) == systemd && -d /package ]] || exit 1
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+case $(uname -m) in x86_64) pkg_arch=amd64 ;; aarch64) pkg_arch=arm64 ;; *) echo "unsupported arch"; exit 1 ;; esac
 run_install() {
-  if ! bash /src/vps/install.sh --package /package/xnvgatebox-linux-amd64.tar.gz >/tmp/install.log 2>&1; then
+  if ! bash /src/vps/install.sh --package "/package/xnvgatebox-linux-$pkg_arch.tar.gz" >/tmp/install.log 2>&1; then
     tail -120 /tmp/install.log
     journalctl -u xnvgatebox-fanout --no-pager -n 40
     /usr/local/bin/xnvgatebox-fanout -check-state -dir /var/lib/xnvgatebox/fanout || true

@@ -2,7 +2,13 @@
 set -euo pipefail
 umask 077
 [[ $(id -u) == 0 ]] || { echo '请以 root 运行'; exit 1; }
-[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || { echo '当前发布包支持 Linux amd64'; exit 1; }
+[[ $(uname -s) == Linux ]] || { echo '当前发布包支持 Linux amd64/arm64'; exit 1; }
+case $(uname -m) in
+  x86_64) pkg_arch=amd64 ;;
+  aarch64) pkg_arch=arm64 ;;
+  *) echo '当前发布包支持 Linux amd64/arm64'; exit 1 ;;
+esac
+package_name="xnvgatebox-linux-$pkg_arch.tar.gz"
 package=''; release_tag=''; job_id=''
 while (($#)); do
   case "$1" in
@@ -108,7 +114,7 @@ $ppp_libdir/sstp-pppd-plugin.so
 %{_mandir}/man8/sstpc.8*
 SPEC
       rpmbuild --define "_topdir $task_tmp/rpmbuild" --define '_build_id_links none' -bb "$task_tmp/rpmbuild/SPECS/sstp.spec"
-      dnf -y install "$task_tmp"/rpmbuild/RPMS/x86_64/xnvgatebox-sstp-client-*.rpm
+      dnf -y install "$task_tmp"/rpmbuild/RPMS/"$(uname -m)"/xnvgatebox-sstp-client-*.rpm
     fi
   fi
 fi
@@ -155,19 +161,19 @@ PY
   release_url="https://github.com/hys550663898/xnvgatebox/releases/download/$release_tag"
   mark_phase downloading
   echo '下载完整安装包…'
-  curl -fL --progress-bar --retry 3 --connect-timeout 15 --max-time 180 "$release_url/xnvgatebox-linux-amd64.tar.gz" -o "$task_tmp/xnvgatebox-linux-amd64.tar.gz"
+  curl -fL --progress-bar --retry 3 --connect-timeout 15 --max-time 180 "$release_url/$package_name" -o "$task_tmp/$package_name"
   curl -fLsS --retry 3 --connect-timeout 15 --max-time 60 "$release_url/checksums.txt" -o "$task_tmp/checksums.txt"
 else
   package=$(realpath "$package")
   cp "$(dirname "$package")/checksums.txt" "$task_tmp/checksums.txt"
-  cp "$package" "$task_tmp/xnvgatebox-linux-amd64.tar.gz"
+  cp "$package" "$task_tmp/$package_name"
 fi
 mark_phase verifying
 echo '校验并解包…'
 # Check only the expected member; never let checksum text choose local paths.
-python3 - "$task_tmp" "$release_tag" <<'PY'
+python3 - "$task_tmp" "$release_tag" "$package_name" <<'PY'
 import hashlib,json,pathlib,re,sys,tarfile
-base=pathlib.Path(sys.argv[1]);expected=sys.argv[2];name='xnvgatebox-linux-amd64.tar.gz'
+base=pathlib.Path(sys.argv[1]);expected=sys.argv[2];name=sys.argv[3]
 lines=[line.split() for line in (base/'checksums.txt').read_text().splitlines()]
 matches=[v[0].lower() for v in lines if len(v)==2 and v[1].lstrip('*')==name]
 if len(matches)!=1 or not re.fullmatch('[a-f0-9]{64}',matches[0]) or hashlib.sha256((base/name).read_bytes()).hexdigest()!=matches[0]:raise SystemExit('安装包校验失败')
@@ -184,6 +190,7 @@ with tarfile.open(base/name) as t:
     if set(sums)!=set(files)-{'package-sha256.json'} or any(hashlib.sha256(files[n]).hexdigest()!=h for n,h in sums.items()):raise SystemExit('安装包文件清单校验失败')
     build=json.loads(files['BUILD.json']);version=files['VERSION'].decode().strip()
     if version!=build.get('version') or (expected and (version!=expected or build.get('source_dirty') is not False or build.get('manager_origin')!='built_from_source')):raise SystemExit('安装包版本或源码信息不匹配')
+    if build.get('arch') is not None and name!='xnvgatebox-linux-%s.tar.gz'%build['arch']:raise SystemExit('安装包架构不匹配')
     if 'deploy/installer.py' not in files:raise SystemExit('所选旧版本不支持完整包更新，请使用对应版本的安装说明')
     out=base/'unpack';out.mkdir(mode=0o700)
     for m in entries:

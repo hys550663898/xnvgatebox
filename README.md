@@ -12,7 +12,7 @@
 
 ## 安装
 
-需要 root、Linux x86_64、systemd 和可用的 TUN/network namespace。支持范围与各系统测试结果见 [系统兼容性](docs/LINUX_SUPPORT.md)。
+需要 root、Linux x86_64 或 arm64（aarch64）、systemd 和可用的 TUN/network namespace。安装脚本会按机器架构自动选择对应的发布包。支持范围与各系统测试结果见 [系统兼容性](docs/LINUX_SUPPORT.md)。
 
 当前版本：[v0.10.1](https://github.com/hys550663898/xnvgatebox/releases/tag/v0.10.1)。统一安装入口支持 Debian 12/13、Ubuntu 22.04/24.04 和 CentOS Stream 9/10。六个系统已通过自动安装、更新及卸载测试；CentOS 独立 VPS 验收尚未完成。CentOS 7/8（含 Stream 8）不在支持范围。
 
