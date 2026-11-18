@@ -294,6 +294,11 @@ func (c *Console) watch() {
 		if err := c.ensureAllPublicSocks(); err != nil {
 			log.Printf("外部 SOCKS 对账失败: %v", err)
 		}
+		// 全固定凭据同样是对账规则：保存时没改上的、恢复时带回旧值的，
+		// 都在这一轮被批量纠正（全部一致时不触发任何动作）。
+		if err := c.enforceFixedCreds(); err != nil {
+			log.Printf("固定凭据对账失败: %v", err)
+		}
 		c.targetMu.Unlock()
 		select {
 		case <-c.ctx.Done():

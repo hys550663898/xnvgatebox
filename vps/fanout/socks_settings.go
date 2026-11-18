@@ -112,45 +112,83 @@ func (c *Console) saveSocksSettings(s socksSettings) error {
 //
 // fixed：所有出口统一成固定凭据，已经一致的跳过，重复保存可安全重试。
 // random 且 reapply 为真：每条出口重新生成互不相同的随机凭据。
-// 逐条走 Manager.SetCred，失败的那条会按 SetCred 语义恢复旧凭据，
-// 其余出口继续，错误汇总后返回。
+//
+// 批量语义而不是逐条 SetCred：逐条改意味着每条都要全量重启一次
+// Xray，生产环境里出口在重启间隙抖动、重建，后面的 SetCred 会因
+// 隧道已被替换或配置应用失败而回滚，表现为“只改成功了第一个”。
+// 这里先把全部目标凭据一次写进内存，只 apply 一次、存盘一次；
+// apply 或存盘失败则整体恢复旧凭据再 apply 一次。
 func (c *Console) applySocksCreds(s socksSettings, reapplyRandom bool) error {
-	var errs []string
-	if s.CredMode == credModeFixed {
-		want := s.fixedCred()
-		for _, t := range c.m.Tunnels() {
+	type change struct {
+		t        *Tunnel
+		previous SocksCred
+	}
+	var changes []change
+	assigned := map[SocksCred]bool{}
+	for _, t := range c.m.Tunnels() {
+		var want SocksCred
+		switch {
+		case s.CredMode == credModeFixed:
+			want = s.fixedCred()
 			if t.credential() == want {
 				continue
 			}
-			if _, err := c.m.SetCred(t.Slot, want); err != nil {
-				errs = append(errs, fmt.Sprintf("Slot %d: %v", t.Slot, err))
-			}
-		}
-	} else if reapplyRandom {
-		assigned := map[SocksCred]bool{}
-		for _, t := range c.m.Tunnels() {
-			var cred SocksCred
+		case reapplyRandom:
 			for attempt := 0; attempt < 8; attempt++ {
 				gen, err := newSocksCred()
 				if err != nil {
 					return err
 				}
 				if !assigned[gen] {
-					cred = gen
+					want = gen
 					break
 				}
 			}
-			if cred.User == "" {
+			if want.User == "" {
 				return fmt.Errorf("无法为 Slot %d 生成不重复的随机凭据", t.Slot)
 			}
-			assigned[cred] = true
-			if _, err := c.m.SetCred(t.Slot, cred); err != nil {
-				errs = append(errs, fmt.Sprintf("Slot %d: %v", t.Slot, err))
-			}
+			assigned[want] = true
+		default:
+			return nil
 		}
+		changes = append(changes, change{t: t, previous: t.credential()})
+		t.setCredential(want)
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("部分出口凭据应用失败: %s", strings.Join(errs, "; "))
+	if len(changes) == 0 {
+		return nil
+	}
+	rollback := func(cause error) error {
+		for _, ch := range changes {
+			ch.t.setCredential(ch.previous)
+		}
+		if err := c.m.resync(changes[0].t); err != nil {
+			return fmt.Errorf("凭据应用失败且旧配置恢复失败: %v (原错误: %w)", err, cause)
+		}
+		_ = c.m.saveState()
+		return fmt.Errorf("凭据应用失败，已恢复全部旧凭据: %w", cause)
+	}
+	if err := c.m.resync(changes[0].t); err != nil {
+		return rollback(err)
+	}
+	if err := c.m.saveState(); err != nil {
+		return rollback(err)
+	}
+	return nil
+}
+
+// enforceFixedCreds 是 watch 对账的一半：全固定模式下，任何凭据与
+// 固定值不一致的出口（例如保存时正逢抖动没改上的、恢复时带回旧
+// 凭据的）都会被批量纠正。全部一致时零成本返回，不触发重启。
+func (c *Console) enforceFixedCreds() error {
+	s := c.socksSnapshot()
+	if s.CredMode != credModeFixed {
+		return nil
+	}
+	want := s.fixedCred()
+	for _, t := range c.m.Tunnels() {
+		if t.credential() != want {
+			return c.applySocksCreds(s, false)
+		}
 	}
 	return nil
 }

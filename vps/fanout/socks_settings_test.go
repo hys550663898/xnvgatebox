@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -200,5 +203,81 @@ func TestApplySocksCredsFixedThenRandom(t *testing.T) {
 	a, b := ts[0].credential(), second.credential()
 	if a == fixed.fixedCred() || b == fixed.fixedCred() || a == b || a.User == "" || b.User == "" {
 		t.Fatal("switching to random must regenerate distinct credentials", a, b)
+	}
+}
+
+// Regression for the production report "only the first list entry
+// changed": batch application must unify every tunnel with a single
+// Xray restart, and the watch-side enforcement must converge drifted
+// credentials without any save action.
+func TestApplySocksCredsBatchSingleRestartAndEnforce(t *testing.T) {
+	n, runtime, ts := rollbackFixture(t)
+	usePanel(t, n)
+	m := NewManager(32, t.TempDir())
+	second := &Tunnel{Slot: 2, Port: 17930, Status: "up", Node: Node{HostName: "b"}, Cred: SocksCred{User: "user-two", Pass: "pass-two-123"}}
+	third := &Tunnel{Slot: 3, Port: 17931, Status: "up", Node: Node{HostName: "c"}, Cred: SocksCred{User: "user-three", Pass: "pass-three-123"}}
+	m.tunnels[1] = ts[0]
+	m.tunnels[2] = second
+	m.tunnels[3] = third
+	c := &Console{m: m}
+	fixed := socksSettings{PortMin: 20000, PortMax: 60000, CredMode: credModeFixed, FixedUser: "fixeduser", FixedPass: "fixedpass123"}
+	if err := c.saveSocksSettings(fixed); err != nil {
+		t.Fatal(err)
+	}
+	starts := runtime.starts
+	if err := c.applySocksCreds(fixed, false); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.starts != starts+1 {
+		t.Fatal("batch apply must restart Xray exactly once", runtime.starts, starts)
+	}
+	for _, tun := range []*Tunnel{ts[0], second, third} {
+		if tun.credential() != fixed.fixedCred() {
+			t.Fatal("batch apply missed a slot", tun.Slot, tun.credential())
+		}
+	}
+	// Drift one slot back (simulating a save-time miss or a restore);
+	// enforcement must converge it, and a converged state is a no-op.
+	second.setCredential(SocksCred{User: "drifted", Pass: "drifted-pass"})
+	if err := c.enforceFixedCreds(); err != nil {
+		t.Fatal(err)
+	}
+	if second.credential() != fixed.fixedCred() {
+		t.Fatal("enforcement did not converge drifted credential", second.credential())
+	}
+	starts = runtime.starts
+	if err := c.enforceFixedCreds(); err != nil || runtime.starts != starts {
+		t.Fatal("converged enforcement must be a no-op")
+	}
+}
+
+// The settings handler itself must unify every tunnel, not just the
+// first, in one request.
+func TestSocksSettingsHandlerUnifiesAllTunnels(t *testing.T) {
+	n, _, ts := rollbackFixture(t)
+	usePanel(t, n)
+	m := NewManager(32, t.TempDir())
+	second := &Tunnel{Slot: 2, Port: 17930, Status: "up", Node: Node{HostName: "b"}, Cred: SocksCred{User: "user-two", Pass: "pass-two-123"}}
+	third := &Tunnel{Slot: 3, Port: 17931, Status: "up", Node: Node{HostName: "c"}, Cred: SocksCred{User: "user-three", Pass: "pass-three-123"}}
+	m.tunnels[1] = ts[0]
+	m.tunnels[2] = second
+	m.tunnels[3] = third
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := &Console{m: m, ctx: ctx}
+	if err := c.loadSocksSettings(); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"port_min":58000,"port_max":60000,"cred_mode":"fixed","fixed_user":"fixeduser","fixed_pass":"fixedpass123","apply_creds":true}`
+	req := httptest.NewRequest("POST", "/api/console/socks/settings", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	c.apiSocksSettings(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("settings save failed: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, tun := range []*Tunnel{ts[0], second, third} {
+		if tun.credential() != (SocksCred{User: "fixeduser", Pass: "fixedpass123"}) {
+			t.Fatal("handler did not unify slot", tun.Slot, tun.credential())
+		}
 	}
 }
