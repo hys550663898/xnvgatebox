@@ -20,6 +20,10 @@ import (
 )
 
 func writeTestCert(t *testing.T, dir string, notBefore, notAfter time.Time) (certFile, keyFile string) {
+	return writeTestCertSerial(t, dir, 1, notBefore, notAfter)
+}
+
+func writeTestCertSerial(t *testing.T, dir string, serial int64, notBefore, notAfter time.Time) (certFile, keyFile string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
@@ -29,7 +33,7 @@ func writeTestCert(t *testing.T, dir string, notBefore, notAfter time.Time) (cer
 		t.Fatal(err)
 	}
 	tpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: big.NewInt(serial),
 		Subject:      pkix.Name{CommonName: "panel.example.com"},
 		DNSNames:     []string{"panel.example.com"},
 		NotBefore:    notBefore,
@@ -169,4 +173,95 @@ func TestWebServerServesTLS(t *testing.T) {
 		t.Fatal("live TLS listener broken by failed reload", err)
 	}
 	resp.Body.Close()
+}
+
+// Regression for the production report: enabling HTTPS while keeping
+// the SAME management port failed with "bind: address already in use"
+// because the new listener was pre-bound while the old one (same port)
+// was still serving. The toggle must swap in place.
+func TestWebServerToggleHTTPSOnSamePort(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadWebSettings(dir, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	certFile, keyFile := writeTestCert(t, dir, now.Add(-time.Hour), now.Add(24*time.Hour))
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	srv := newWebServer(h)
+	port := freePort(t)
+	base := WebSettings{Port: port, ListenAddr: "127.0.0.1"}
+	if err := srv.reload(base); err != nil {
+		t.Fatal(err)
+	}
+	waitServe(t, port)
+
+	withTLS := base
+	withTLS.HTTPS = true
+	withTLS.Domain = "panel.example.com"
+	withTLS.CertFile = certFile
+	withTLS.KeyFile = keyFile
+	if err := srv.applyWebSettings(withTLS); err != nil {
+		t.Fatal("same-port HTTPS toggle must not fail with address in use", err)
+	}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, Timeout: time.Second}
+	url := "https://127.0.0.1:" + strconv.Itoa(port) + "/"
+	deadline := time.Now().Add(6 * time.Second)
+	for {
+		resp, err := client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("TLS did not come up on the same port after toggle", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// And back to plain HTTP on the same port.
+	if err := srv.applyWebSettings(base); err != nil {
+		t.Fatal("toggle back to HTTP", err)
+	}
+	waitServe(t, port)
+}
+
+// While HTTPS stays on, replacing the cert files and re-saving must
+// rotate the served certificate without rebinding the port.
+func TestWebServerCertRotationWithoutRebind(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadWebSettings(dir, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	certFile, keyFile := writeTestCertSerial(t, dir, 11, now.Add(-time.Hour), now.Add(24*time.Hour))
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	srv := newWebServer(h)
+	port := freePort(t)
+	cfg := WebSettings{Port: port, ListenAddr: "127.0.0.1", HTTPS: true, CertFile: certFile, KeyFile: keyFile}
+	if err := srv.reload(cfg); err != nil {
+		t.Fatal(err)
+	}
+	peerSerial := func() int64 {
+		conn, err := tls.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), &tls.Config{InsecureSkipVerify: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		return conn.ConnectionState().PeerCertificates[0].SerialNumber.Int64()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for peerSerial() != 11 {
+		if time.Now().After(deadline) {
+			t.Fatal("initial cert not served")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// Renewal replaces the files in place; re-saving the same settings
+	// must serve the new certificate on the same listener.
+	writeTestCertSerial(t, dir, 22, now.Add(-time.Hour), now.Add(24*time.Hour))
+	if err := srv.applyWebSettings(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := peerSerial(); got != 22 {
+		t.Fatal("cert rotation did not take effect", got)
+	}
 }

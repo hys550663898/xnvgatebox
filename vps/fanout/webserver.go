@@ -18,6 +18,8 @@ type webServer struct {
 	ln              net.Listener
 	srv             *http.Server
 	addr            string
+	cfg             WebSettings
+	hasCfg          bool
 	prepareListener func(WebSettings) (*preparedManagementListener, error)
 	managementHook  func(string) error
 }
@@ -58,15 +60,19 @@ func (s *webServer) reload(cfg WebSettings) error {
 	return nil
 }
 
-func (s *webServer) activateListener(ln net.Listener, addr string) {
-
-	s.mu.Lock()
-	oldSrv := s.srv
-	oldLn := s.ln
+// startServing 在给定监听上开始服务并登记为当前监听，不动旧监听。
+func (s *webServer) startServing(ln net.Listener, cfg WebSettings) {
+	if cfg.HTTPS {
+		ln = wrapManagementTLS(ln)
+	}
+	addr := cfg.listenAddrString()
 	srv := &http.Server{Handler: s.handler}
+	s.mu.Lock()
 	s.srv = srv
 	s.ln = ln
 	s.addr = addr
+	s.cfg = cfg
+	s.hasCfg = true
 	s.mu.Unlock()
 
 	go func() {
@@ -74,6 +80,18 @@ func (s *webServer) activateListener(ln net.Listener, addr string) {
 			log.Printf("HTTP 监听 %s 退出: %v", addr, err)
 		}
 	}()
+	log.Printf("管理界面监听已切换到 %s", addr)
+}
+
+// activateListener 登记新监听并优雅关闭旧监听（新旧地址不同时用：
+// 新地址已在 prepare 阶段绑好，这里只负责交接）。
+func (s *webServer) activateListener(ln net.Listener, cfg WebSettings) {
+	s.mu.Lock()
+	oldSrv := s.srv
+	oldLn := s.ln
+	s.mu.Unlock()
+
+	s.startServing(ln, cfg)
 
 	// 关掉旧监听。给正在处理的请求一点收尾时间，
 	// 尤其是触发这次 reload 的那个请求本身要先把响应写完。
@@ -86,8 +104,47 @@ func (s *webServer) activateListener(ln net.Listener, addr string) {
 			_ = oldLn.Close()
 		}()
 	}
+}
 
-	log.Printf("管理界面监听已切换到 %s", addr)
+// swapInPlace 在同一地址上原地切换协议（HTTP↔HTTPS）：端口被旧监听
+// 占着，没法像换端口那样先绑新的，只能先等触发切换的响应写完，
+// 再关旧、绑新。绑新失败时按旧配置把监听恢复回来，服务不中断太久。
+func (s *webServer) swapInPlace(next WebSettings) {
+	if next.HTTPS {
+		if err := storeManagementCert(next.CertFile, next.KeyFile); err != nil {
+			log.Printf("同端口切换 HTTPS 失败，证书不可用: %v", err)
+			return
+		}
+	}
+	go func() {
+		time.Sleep(1 * time.Second)
+		s.mu.Lock()
+		oldSrv := s.srv
+		oldLn := s.ln
+		oldCfg := s.cfg
+		s.mu.Unlock()
+		if oldSrv != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = oldSrv.Shutdown(ctx)
+			cancel()
+		}
+		if oldLn != nil {
+			_ = oldLn.Close()
+		}
+		addr := next.listenAddrString()
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			log.Printf("同端口切换监听失败: %v，尝试恢复原监听", err)
+			ln2, err2 := net.Listen("tcp", addr)
+			if err2 != nil {
+				log.Printf("恢复原监听也失败: %v", err2)
+				return
+			}
+			s.startServing(ln2, oldCfg)
+			return
+		}
+		s.startServing(ln, next)
+	}()
 }
 
 // applyWebSettings 校验、落盘并切换监听。任一步失败都不改动线上监听。

@@ -4,7 +4,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -64,6 +66,35 @@ func loadManagementCert(certFile, keyFile string) (tls.Certificate, error) {
 	}
 	cert.Leaf = leaf
 	return cert, nil
+}
+
+// managementCert 是当前线上监听应使用的证书。TLS 监听通过
+// GetCertificate 每次握手读它：换证书路径或证书文件被续期替换后，
+// 只要把新证书存进来就立即生效，不需要重绑端口——同端口上重绑必然
+// 撞上自己还占着的旧监听（bind: address already in use）。
+var managementCert atomic.Pointer[tls.Certificate]
+
+// storeManagementCert 加载校验一对证书文件并设为当前证书。
+func storeManagementCert(certFile, keyFile string) error {
+	cert, err := loadManagementCert(certFile, keyFile)
+	if err != nil {
+		return err
+	}
+	managementCert.Store(&cert)
+	return nil
+}
+
+// wrapManagementTLS 把裸 TCP 监听包成读 managementCert 的 TLS 监听。
+func wrapManagementTLS(ln net.Listener) net.Listener {
+	return tls.NewListener(ln, &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			if cert := managementCert.Load(); cert != nil {
+				return cert, nil
+			}
+			return nil, fmt.Errorf("管理界面证书未加载")
+		},
+	})
 }
 
 // validateTLSSettings 校验 WebSettings 里与 HTTPS 有关的字段组合。
