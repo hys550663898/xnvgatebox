@@ -29,7 +29,7 @@ def source_identity():
                 json.dumps(files, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
 
 
-def pinned_xray_archive(pin, arch, local=None):
+def pinned_xray_archive(pin, local=None, arch="amd64"):
     asset = pin["assets"]["linux-" + {"amd64": "x86_64", "arm64": "arm64"}[arch]]
     if local is not None:
         archive = local.read_bytes()
@@ -62,7 +62,7 @@ def main():
                            cwd=ROOT / "vps/fanout", check=True,
                            env={**os.environ, "GOOS": "linux", "GOARCH": args.arch, "CGO_ENABLED": "0"})
         pin = json.loads((ROOT / "config/xray-release.json").read_text())
-        archive = pinned_xray_archive(pin, args.arch, args.xray_archive)
+        archive = pinned_xray_archive(pin, local=args.xray_archive, arch=args.arch)
         with zipfile.ZipFile(io.BytesIO(archive)) as z:
             (stage / "bin/xray").write_bytes(z.read("xray"))
             (stage / "LICENSE.xray").write_bytes(z.read("LICENSE"))

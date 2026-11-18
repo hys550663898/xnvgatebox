@@ -1,12 +1,15 @@
 """Deployment transactions use a temporary filesystem and fake systemd only."""
 import hashlib
+import http.server
 import importlib.util
 import io
 import json
 from pathlib import Path
+import ssl
 import subprocess
 import tarfile
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -348,6 +351,85 @@ class ArchiveTests(unittest.TestCase):
                     if case == 'symlink': extra.type = tarfile.SYMTYPE; extra.linkname = '/escape'
                 with self.assertRaises(ValueError): d.checked_archive(self.package(root, mutate, extra), root / 'out', expected)
                 self.assertFalse((root / 'out').exists())
+
+
+class _HealthHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *args): pass
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get('Content-Length') or 0))
+        if self.path == '/synthetic-base/login':
+            self.send_response(200)
+            self.send_header('Set-Cookie', 'session=synthetic')
+            self.end_headers()
+        else:
+            self.send_response(404); self.end_headers()
+
+    def do_GET(self):
+        if self.path == '/synthetic-base/api/console':
+            body, status = b'{"version":"v-test"}', 200
+        elif self.path == '/synthetic-base/api/exits':
+            body, status = b'{"backend":"native"}', 200
+        else:
+            body, status = b'{}', 404
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class _ActiveRunner:
+    def active(self, unit): return True
+
+    def run(self, args, check=True, **kwargs):
+        return subprocess.CompletedProcess(list(map(str, args)), 0)
+
+
+class HealthSchemeTests(unittest.TestCase):
+    """The post-install health probe must speak the scheme the instance
+    actually serves. Regression: the probe used plain HTTP
+    unconditionally, so on HTTPS instances it could never log in and
+    every web update rolled back a healthy new version."""
+
+    def serve(self, https):
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), _HealthHandler)
+        if https:
+            cert_dir = Path(self.tmp.name) / 'cert'
+            cert_dir.mkdir()
+            result = subprocess.run(
+                ['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                 '-keyout', str(cert_dir / 'key.pem'), '-out', str(cert_dir / 'cert.pem'),
+                 '-days', '1', '-subj', '/CN=localhost'],
+                capture_output=True)
+            if result.returncode != 0:
+                server.server_close()
+                self.skipTest('openssl unavailable for TLS fixture')
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(cert_dir / 'cert.pem', cert_dir / 'key.pem')
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        return server.server_address[1]
+
+    def installer(self, port, https):
+        layout = d.Layout(Path(self.tmp.name) / 'root')
+        layout.work.mkdir(parents=True, exist_ok=True)
+        put(layout.work / 'settings.json',
+            json.dumps({'port': port, 'listen_addr': '127.0.0.1', 'https': https}))
+        put(layout.work / 'password', 'synthetic-password')
+        put(layout.work / 'basepath', 'synthetic-base')
+        return d.Installer(Path(self.tmp.name) / 'stage', 'health-test', layout, _ActiveRunner())
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_health_over_http(self):
+        self.installer(self.serve(False), False).health('v-test')
+
+    def test_health_over_https(self):
+        self.installer(self.serve(True), True).health('v-test')
 
 
 if __name__ == '__main__': unittest.main()

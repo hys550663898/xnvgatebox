@@ -8,6 +8,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -255,6 +256,18 @@ class Installer:
             if p.suffix in ('.service','.timer') and p.name in UNITS:
                 shutil.copyfile(p,units/p.name);(units/p.name).chmod(0o644)
         self.r.run(['systemctl','daemon-reload'])
+    def management_connection(self, settings, host, timeout):
+        # The health probe must speak the scheme the instance actually
+        # serves: with HTTPS enabled the management listener is TLS-only,
+        # and a plain-HTTP probe can never log in, which used to fail
+        # every update on HTTPS instances and roll back a good install.
+        # The certificate belongs to the configured domain while the
+        # probe targets the local bind address, so verification is off;
+        # the probe still authenticates with the management password.
+        if settings.get('https'):
+            return http.client.HTTPSConnection(host,int(settings['port']),timeout=timeout,
+                                               context=ssl._create_unverified_context())
+        return http.client.HTTPConnection(host,int(settings['port']),timeout=timeout)
     def health(self, expected):
         # Only localhost/private configured bind address, no proxy, redirects,
         # credentials or management path in output. Verify the actual process.
@@ -267,7 +280,7 @@ class Installer:
                 host=settings.get('listen_addr') or '127.0.0.1'
                 if host in ('0.0.0.0','all','::'):host='127.0.0.1'
                 base='/'+(self.l.work/'basepath').read_text().strip().strip('/')
-                conn=http.client.HTTPConnection(host,int(settings['port']),timeout=3)
+                conn=self.management_connection(settings,host,3)
                 body=urllib.parse.urlencode({'password':(self.l.work/'password').read_text().strip()})
                 conn.request('POST',base+'/login',body,{'Content-Type':'application/x-www-form-urlencoded'})
                 response=conn.getresponse();response.read();cookie=response.getheader('Set-Cookie','').split(';')[0]
@@ -290,7 +303,7 @@ class Installer:
         host=settings.get('listen_addr') or '127.0.0.1'
         if host in ('0.0.0.0','all','::'):host='127.0.0.1'
         base='/'+(self.l.work/'basepath').read_text().strip().strip('/')
-        conn=http.client.HTTPConnection(host,int(settings['port']),timeout=15)
+        conn=self.management_connection(settings,host,15)
         try:
             body=urllib.parse.urlencode({'password':(self.l.work/'password').read_text().strip()})
             conn.request('POST',base+'/login',body,{'Content-Type':'application/x-www-form-urlencoded'})
