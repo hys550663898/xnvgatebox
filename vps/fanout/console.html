@@ -3035,12 +3035,16 @@
                 "</td><td>仅本机 · " +
                 e.port +
                 "</td><td>" +
-                esc(e.public_socks?.enable ? e.public_socks.port : "开启中") +
+                esc(e.public_socks?.enable ? e.public_socks.port : "未启用") +
                 "</td><td>" +
                 badge(e.status) +
                 '</td><td><div class="actions"><button data-resource-cred="' +
                 e.slot +
-                '">查看 / 复制</button></div></td></tr>',
+                '">查看 / 复制</button><button data-resource-toggle="' +
+                e.slot +
+                '">' +
+                (e.public_socks?.enable ? "关闭外部" : "启用外部") +
+                "</button></div></td></tr>",
             )
             .join("") ||
           '<tr><td colspan="6">暂无出口，请先在出口管理中创建。</td></tr>';
@@ -3373,6 +3377,19 @@
             () => resourceExport([copyButton.dataset.sstpCopy], "text", true),
             copyButton,
           );
+        const toggle = e.target.closest("[data-resource-toggle]");
+        if (toggle) {
+          const row = exits.find(
+            (x) => x.slot === Number(toggle.dataset.resourceToggle),
+          );
+          return action(async () => {
+            await api("api/console/socks", {
+              slot: row.slot,
+              enabled: !row.public_socks?.enable,
+            });
+            await poll();
+          }, toggle);
+        }
         const cred = e.target.closest("[data-resource-cred]");
         if (cred) {
           const row = exits.find(
@@ -3381,7 +3398,7 @@
           $("resourceCredentialTitle").textContent = name(row) + " · SOCKS5";
           $("resourceCredentialScope").textContent = row.public_socks?.enable
             ? "外部接入已开启，使用独立外部端口。"
-            : "外部端口正在开启，稍等片刻刷新后即可供其他设备使用。";
+            : "当前仅 VPS 本机可用，启用外部接入后才能供其他设备使用。";
           $("resourceCredentialURL").value = resourceSocksURL(row);
           $("resourceCredentialUser").value = row.socks_user;
           $("resourceCredentialPass").value = row.socks_pass;
