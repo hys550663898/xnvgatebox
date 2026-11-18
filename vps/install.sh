@@ -143,7 +143,7 @@ mark_phase preparing
 if [[ -z $package ]]; then
   if [[ -z $release_tag ]]; then
     curl -fLsS --retry 3 --connect-timeout 15 --max-time 60 -H 'Accept: application/vnd.github+json' \
-      https://api.github.com/repos/hanhaoops/xnvgatebox/releases/latest -o "$task_tmp/release.json"
+      https://api.github.com/repos/hys550663898/xnvgatebox/releases/latest -o "$task_tmp/release.json"
     release_tag=$(python3 - "$task_tmp/release.json" <<'PY'
 import json,re,sys
 r=json.load(open(sys.argv[1]));tag=r.get('tag_name','')
@@ -152,7 +152,7 @@ print(tag)
 PY
 )
   fi
-  release_url="https://github.com/hanhaoops/xnvgatebox/releases/download/$release_tag"
+  release_url="https://github.com/hys550663898/xnvgatebox/releases/download/$release_tag"
   mark_phase downloading
   echo '下载完整安装包…'
   curl -fL --progress-bar --retry 3 --connect-timeout 15 --max-time 180 "$release_url/xnvgatebox-linux-amd64.tar.gz" -o "$task_tmp/xnvgatebox-linux-amd64.tar.gz"

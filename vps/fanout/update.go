@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const updateRepo = "hanhaoops/xnvgatebox"
+const updateRepo = "hys550663898/xnvgatebox"
 
 // releaseInfo 是 GitHub Releases API 里我们关心的字段。
 type releaseInfo struct {
