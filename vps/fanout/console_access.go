@@ -22,14 +22,14 @@ func (n *Native) socksExposures() map[int]*SocksExposure {
 	return out
 }
 
-// ensurePublicSocks 给每个出口补齐已启用的外部 SOCKS 入站。
+// reconcilePublicSocksPorts 只对账已打开的外部 SOCKS 端口区间。
 //
-// 与 setPublicSocks 的手动开关不同，这是全局规则的对账：缺失的按
-// portMin–portMax 区间新建；已有的强制打开 Enable，且端口落在区间外
-// 时重新分配到区间内（区间内的保持不动）。用户改区间即期望全部开放
-// 端口随之进入新区间，不能只对新入站生效。
-// 一批出口只在确有变化时 apply 一次，避免逐条重启 Xray。
-func (n *Native) ensurePublicSocks(tunnels []*Tunnel, portMin, portMax int) error {
+// 外部接入默认关闭，由用户在列表里逐条打开（setPublicSocks），对账
+// 绝不新建入站、也绝不把手动关闭的重新打开。这里只做一件事：已启
+// 用的入站若端口落在 portMin–portMax 区间外，重新分配到区间内（区
+// 间内的保持不动）——用户改区间即期望已开放端口随之进入新区间。
+// 只在确有变化时 apply 一次，避免逐条重启 Xray。
+func (n *Native) reconcilePublicSocksPorts(tunnels []*Tunnel, portMin, portMax int) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	finish := n.beginChange()
@@ -39,46 +39,19 @@ func (n *Native) ensurePublicSocks(tunnels []*Tunnel, portMin, portMax int) erro
 		used[tunnel.Port] = true
 	}
 	changed := false
-	for _, t := range tunnels {
-		found := false
-		for _, ib := range n.store.Inbounds {
-			if ib.SocksSlot == t.Slot {
-				found = true
-				if !ib.Enable {
-					ib.Enable = true
-					changed = true
-				}
-				if ib.Port < portMin || ib.Port > portMax {
-					port, err := freePortInRange(used, portMin, portMax)
-					if err != nil {
-						return err
-					}
-					used[port] = true
-					ib.Port = port
-					changed = true
-				}
-				break
-			}
-		}
-		if found {
+	for _, ib := range n.store.Inbounds {
+		if ib.SocksSlot <= 0 || !ib.Enable {
 			continue
 		}
-		cred := t.credential()
-		if err := validateCred(cred); err != nil {
-			return err
+		if ib.Port >= portMin && ib.Port <= portMax {
+			continue
 		}
 		port, err := freePortInRange(used, portMin, portMax)
 		if err != nil {
 			return err
 		}
 		used[port] = true
-		n.store.Inbounds = append(n.store.Inbounds, &nativeInbound{
-			ID: n.store.NextID, Port: port, Protocol: "socks", Network: "tcp", Security: "none",
-			Remark: fmt.Sprintf("SOCKS · %02d", t.Slot), NameMode: "custom", Enable: true,
-			BoundSlot: t.Slot, SocksSlot: t.Slot,
-			Clients: []nativeClient{{Email: cred.User, Password: cred.Pass, Enable: true}},
-		})
-		n.store.NextID++
+		ib.Port = port
 		changed = true
 	}
 	if !changed {

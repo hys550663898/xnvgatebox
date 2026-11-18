@@ -75,9 +75,9 @@ func newConsole(m *Manager) (*Console, error) {
 		if err := n.ensureSlotInbounds(ts, host); err != nil {
 			return err
 		}
-		// 新出口在同一次对账里就带上已启用的外部 SOCKS，不等下一轮 watch。
+		// 外部 SOCKS 默认关闭、由用户逐条打开；这里只把已打开的端口对账进设置区间。
 		s := c.socksSnapshot()
-		return n.ensurePublicSocks(ts, s.PortMin, s.PortMax)
+		return n.reconcilePublicSocksPorts(ts, s.PortMin, s.PortMax)
 	}
 	c.probe = c.probeCandidate
 	if err := recoverConfigTransaction(m.workDir, consoleJournal, []string{"console.json"}); err != nil {
@@ -289,9 +289,9 @@ func (c *Console) watch() {
 		if err := c.reconcile(); err != nil {
 			log.Printf("出口计划等待重试: %v", err)
 		}
-		// 外部 SOCKS 全部强制开启：手动关掉的也会在这一轮被重新打开，
-		// 这是全局设置定下的规则，不是逐条开关的记忆。
-		if err := c.ensureAllPublicSocks(); err != nil {
+		// 外部 SOCKS 默认关闭、逐条手动打开；对账只把已打开的端口
+		// 迁进设置区间，绝不新建、也绝不重新打开手动关闭的。
+		if err := c.reconcileAllPublicSocks(); err != nil {
 			log.Printf("外部 SOCKS 对账失败: %v", err)
 		}
 		// 全固定凭据同样是对账规则：保存时没改上的、恢复时带回旧值的，

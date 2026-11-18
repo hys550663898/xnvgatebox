@@ -72,48 +72,61 @@ func TestFreePortInRange(t *testing.T) {
 	}
 }
 
-func TestEnsurePublicSocksForceOpensInRange(t *testing.T) {
+func TestReconcilePublicSocksPortsOnlyTouchesEnabled(t *testing.T) {
 	n, runtime, ts := rollbackFixture(t)
-	if err := n.ensurePublicSocks(ts, 24100, 24110); err != nil {
+	// External access is off by default: reconciliation must not create
+	// an inbound for a tunnel that has none, nor restart Xray for it.
+	starts := runtime.starts
+	if err := n.reconcilePublicSocksPorts(ts, 24100, 24110); err != nil {
+		t.Fatal(err)
+	}
+	if n.socksExposures()[1] != nil || runtime.starts != starts {
+		t.Fatal("reconcile must not auto-open external SOCKS")
+	}
+	// The user opens it manually; the port comes from the configured range.
+	if err := n.setPublicSocksInRange(ts[0], true, ts, 24100, 24110); err != nil {
 		t.Fatal(err)
 	}
 	exposure := n.socksExposures()[1]
 	if exposure == nil || !exposure.Enable {
-		t.Fatal("external SOCKS must be created enabled")
+		t.Fatal("manual open must enable external SOCKS")
 	}
 	if exposure.Port < 24100 || exposure.Port > 24110 {
 		t.Fatal("external port outside configured range", exposure.Port)
 	}
-	starts := runtime.starts
-	if err := n.ensurePublicSocks(ts, 24100, 24110); err != nil || runtime.starts != starts {
-		t.Fatal("idempotent ensure restarted Xray")
+	starts = runtime.starts
+	if err := n.reconcilePublicSocksPorts(ts, 24100, 24110); err != nil || runtime.starts != starts {
+		t.Fatal("idempotent reconcile restarted Xray")
 	}
-	// A manual close is overridden by the global force-open rule,
-	// and a port already inside the range is kept.
+	// A manual close sticks: reconciliation never re-opens it.
 	if err := n.setPublicSocks(ts[0], false, ts); err != nil {
 		t.Fatal(err)
 	}
 	if n.socksExposures()[1].Enable {
 		t.Fatal("manual close fixture failed")
 	}
-	if err := n.ensurePublicSocks(ts, 24100, 24110); err != nil {
+	starts = runtime.starts
+	if err := n.reconcilePublicSocksPorts(ts, 24100, 24110); err != nil || runtime.starts != starts {
+		t.Fatal("reconcile restarted Xray for a closed inbound")
+	}
+	if n.socksExposures()[1].Enable {
+		t.Fatal("reconcile must not re-open a manually closed inbound")
+	}
+	// Re-open manually, then a range change still moves the enabled
+	// port into the new range.
+	if err := n.setPublicSocksInRange(ts[0], true, ts, 24100, 24110); err != nil {
 		t.Fatal(err)
 	}
-	again := n.socksExposures()[1]
-	if !again.Enable || again.Port != exposure.Port {
-		t.Fatal("force-open must re-enable without moving an in-range port", again, exposure)
-	}
-	// Changing the range moves out-of-range ports into the new range.
-	if err := n.ensurePublicSocks(ts, 25000, 25010); err != nil {
+	if err := n.reconcilePublicSocksPorts(ts, 25000, 25010); err != nil {
 		t.Fatal(err)
 	}
 	moved := n.socksExposures()[1]
 	if !moved.Enable || moved.Port < 25000 || moved.Port > 25010 {
-		t.Fatal("range change must move the port into the new range", moved)
+		t.Fatal("range change must move the enabled port into the new range", moved)
 	}
 	starts = runtime.starts
-	if err := n.ensurePublicSocks(ts, 25000, 25010); err != nil || runtime.starts != starts {
-		t.Fatal("idempotent ensure after move restarted Xray")
+	if err := n.reconcilePublicSocksPorts(ts, 25000, 25010); err != nil || runtime.starts != starts {
+		t.Fatal("idempotent reconcile after move restarted Xray")
 	}
 	stored, err := loadNativeStore(n.dir)
 	if err != nil || len(stored.Inbounds) != 2 || !stored.Inbounds[1].Enable || stored.Inbounds[1].SocksSlot != 1 {

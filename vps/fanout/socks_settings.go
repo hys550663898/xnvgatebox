@@ -193,11 +193,11 @@ func (c *Console) enforceFixedCreds() error {
 	return nil
 }
 
-// ensureAllPublicSocks 强制每个出口都有一个已启用的外部 SOCKS 入站。
-// 补开缺失的和曾被手动关闭的；已有端口落在设置区间外的重新分配到
-// 区间内，区间内的保持不动；新分配的端口只从设置的区间里取。
-// 非内置模式没有外部 SOCKS 概念，静默跳过。
-func (c *Console) ensureAllPublicSocks() error {
+// reconcileAllPublicSocks 只对账已打开的外部 SOCKS 端口区间：已启用
+// 入站的端口落在设置区间外的重新分配到区间内，区间内的保持不动。
+// 外部接入默认关闭、由用户逐条打开，对账不新建入站、不重新打开
+// 手动关闭的。非内置模式没有外部 SOCKS 概念，静默跳过。
+func (c *Console) reconcileAllPublicSocks() error {
 	p, err := openPanel()
 	if err != nil {
 		return nil
@@ -207,7 +207,7 @@ func (c *Console) ensureAllPublicSocks() error {
 		return nil
 	}
 	s := c.socksSnapshot()
-	return n.ensurePublicSocks(c.m.Tunnels(), s.PortMin, s.PortMax)
+	return n.reconcilePublicSocksPorts(c.m.Tunnels(), s.PortMin, s.PortMax)
 }
 
 type socksSettingsRequest struct {
@@ -247,7 +247,7 @@ func (c *Console) apiSocksSettings(w http.ResponseWriter, r *http.Request) {
 	if err := c.applySocksCreds(next, req.ApplyCreds || transition); err != nil {
 		errs = append(errs, err.Error())
 	}
-	if err := c.ensureAllPublicSocks(); err != nil {
+	if err := c.reconcileAllPublicSocks(); err != nil {
 		errs = append(errs, err.Error())
 	}
 	invalidateInbounds()
