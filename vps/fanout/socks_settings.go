@@ -156,8 +156,8 @@ func (c *Console) applySocksCreds(s socksSettings, reapplyRandom bool) error {
 }
 
 // ensureAllPublicSocks 强制每个出口都有一个已启用的外部 SOCKS 入站。
-// 已有外部端口不搬家（端口是已分发链接的身份），只补开缺失的和
-// 曾被手动关闭的；新分配的端口只从设置的区间里取。
+// 补开缺失的和曾被手动关闭的；已有端口落在设置区间外的重新分配到
+// 区间内，区间内的保持不动；新分配的端口只从设置的区间里取。
 // 非内置模式没有外部 SOCKS 概念，静默跳过。
 func (c *Console) ensureAllPublicSocks() error {
 	p, err := openPanel()

@@ -86,19 +86,31 @@ func TestEnsurePublicSocksForceOpensInRange(t *testing.T) {
 		t.Fatal("idempotent ensure restarted Xray")
 	}
 	// A manual close is overridden by the global force-open rule,
-	// and the already assigned port is kept.
+	// and a port already inside the range is kept.
 	if err := n.setPublicSocks(ts[0], false, ts); err != nil {
 		t.Fatal(err)
 	}
 	if n.socksExposures()[1].Enable {
 		t.Fatal("manual close fixture failed")
 	}
-	if err := n.ensurePublicSocks(ts, 25000, 25010); err != nil {
+	if err := n.ensurePublicSocks(ts, 24100, 24110); err != nil {
 		t.Fatal(err)
 	}
 	again := n.socksExposures()[1]
 	if !again.Enable || again.Port != exposure.Port {
-		t.Fatal("force-open must re-enable without moving the port", again, exposure)
+		t.Fatal("force-open must re-enable without moving an in-range port", again, exposure)
+	}
+	// Changing the range moves out-of-range ports into the new range.
+	if err := n.ensurePublicSocks(ts, 25000, 25010); err != nil {
+		t.Fatal(err)
+	}
+	moved := n.socksExposures()[1]
+	if !moved.Enable || moved.Port < 25000 || moved.Port > 25010 {
+		t.Fatal("range change must move the port into the new range", moved)
+	}
+	starts = runtime.starts
+	if err := n.ensurePublicSocks(ts, 25000, 25010); err != nil || runtime.starts != starts {
+		t.Fatal("idempotent ensure after move restarted Xray")
 	}
 	stored, err := loadNativeStore(n.dir)
 	if err != nil || len(stored.Inbounds) != 2 || !stored.Inbounds[1].Enable || stored.Inbounds[1].SocksSlot != 1 {

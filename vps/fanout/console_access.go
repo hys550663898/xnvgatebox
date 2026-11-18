@@ -25,7 +25,9 @@ func (n *Native) socksExposures() map[int]*SocksExposure {
 // ensurePublicSocks 给每个出口补齐已启用的外部 SOCKS 入站。
 //
 // 与 setPublicSocks 的手动开关不同，这是全局规则的对账：缺失的按
-// portMin–portMax 区间新建，已有的只把 Enable 强制打开、端口不搬家。
+// portMin–portMax 区间新建；已有的强制打开 Enable，且端口落在区间外
+// 时重新分配到区间内（区间内的保持不动）。用户改区间即期望全部开放
+// 端口随之进入新区间，不能只对新入站生效。
 // 一批出口只在确有变化时 apply 一次，避免逐条重启 Xray。
 func (n *Native) ensurePublicSocks(tunnels []*Tunnel, portMin, portMax int) error {
 	n.mu.Lock()
@@ -44,6 +46,15 @@ func (n *Native) ensurePublicSocks(tunnels []*Tunnel, portMin, portMax int) erro
 				found = true
 				if !ib.Enable {
 					ib.Enable = true
+					changed = true
+				}
+				if ib.Port < portMin || ib.Port > portMax {
+					port, err := freePortInRange(used, portMin, portMax)
+					if err != nil {
+						return err
+					}
+					used[port] = true
+					ib.Port = port
 					changed = true
 				}
 				break
