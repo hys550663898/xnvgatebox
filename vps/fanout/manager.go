@@ -27,10 +27,13 @@ type Manager struct {
 	localEvidence   map[string]Node
 	stateWriteHook  func(string) error
 	credentialApply func(*Tunnel) error
-	connectBudget   *connectBudget
-	observations    map[string]CheckResult
-	diagnostics     map[string]*diagnosticLease
-	console         *Console
+	// credForNew 决定新出口（及恢复时无存盘凭据的出口）用什么凭据，
+	// 由 Console 按 SOCKS 全局设置注入；未注入时每条随机。
+	credForNew    func() (SocksCred, error)
+	connectBudget *connectBudget
+	observations  map[string]CheckResult
+	diagnostics   map[string]*diagnosticLease
+	console       *Console
 }
 
 func NewManager(maxSlots int, workDir string) *Manager {
@@ -45,6 +48,15 @@ func NewManager(maxSlots int, workDir string) *Manager {
 		observations:  map[string]CheckResult{},
 		diagnostics:   map[string]*diagnosticLease{},
 	}
+}
+
+// newSlotCred 生成一条新出口的凭据：注入了全局设置就按设置
+// （fixed 时所有出口共用同一套），否则保持原行为每条随机。
+func (m *Manager) newSlotCred() (SocksCred, error) {
+	if m.credForNew != nil {
+		return m.credForNew()
+	}
+	return newSocksCred()
 }
 
 // RefreshNodes 重新拉取节点列表。
@@ -154,7 +166,7 @@ func (m *Manager) StartWithPolicy(node Node, policy SlotPolicy) (*Tunnel, error)
 			return nil, err
 		}
 	}
-	cred, err := newSocksCred()
+	cred, err := m.newSlotCred()
 	if err != nil {
 		m.mu.Unlock()
 		return nil, err

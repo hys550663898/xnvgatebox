@@ -121,7 +121,7 @@ func (m *Manager) restoreState() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	tunnels, err := prepareRestoredTunnels(st, m.nodes)
+	tunnels, err := prepareRestoredTunnelsWithCred(st, m.nodes, m.newSlotCred)
 	if err != nil {
 		return 0, err
 	}
@@ -197,6 +197,12 @@ func decodePersistedState(blob []byte, maxSlots int, residential bool) (*persist
 }
 
 func prepareRestoredTunnels(st *persistedState, nodes []Node) ([]*Tunnel, error) {
+	return prepareRestoredTunnelsWithCred(st, nodes, newSocksCred)
+}
+
+// gen 只为存盘里完全没有凭据的旧状态补凭据；已有凭据的出口原样保留，
+// 全局凭据模式的统一由设置保存时的批量应用负责，不在恢复时偷偷改。
+func prepareRestoredTunnelsWithCred(st *persistedState, nodes []Node, gen func() (SocksCred, error)) ([]*Tunnel, error) {
 	// 从当前节点列表补回地区、延迟等元数据；节点已下线时退回存盘的最小信息
 	known := map[string]Node{}
 	for _, n := range nodes {
@@ -223,11 +229,11 @@ func prepareRestoredTunnels(st *persistedState, nodes []Node) ([]*Tunnel, error)
 		// 从旧版本升上来的状态文件没有凭据字段，补一套新的
 		cred := SocksCred{User: p.SocksUser, Pass: p.SocksPass}
 		if cred.User == "" && cred.Pass == "" {
-			gen, err := newSocksCred()
+			generated, err := gen()
 			if err != nil {
 				return nil, fmt.Errorf("生成 SOCKS5 凭据失败: %w", err)
 			}
-			cred = gen
+			cred = generated
 		}
 		t := &Tunnel{
 			Slot:           p.Slot,

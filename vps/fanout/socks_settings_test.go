@@ -1,0 +1,192 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestValidateSocksSettings(t *testing.T) {
+	valid := []socksSettings{
+		{PortMin: 20000, PortMax: 60000, CredMode: credModeRandom},
+		{PortMin: 30000, PortMax: 30000, CredMode: credModeFixed, FixedUser: "fixeduser", FixedPass: "fixedpass123"},
+	}
+	for _, s := range valid {
+		if err := validateSocksSettings(s); err != nil {
+			t.Fatal("valid settings rejected", s, err)
+		}
+	}
+	invalid := []socksSettings{
+		{PortMin: 80, PortMax: 60000, CredMode: credModeRandom},
+		{PortMin: 30001, PortMax: 30000, CredMode: credModeRandom},
+		{PortMin: 20000, PortMax: 70000, CredMode: credModeRandom},
+		{PortMin: 20000, PortMax: 60000, CredMode: "bogus"},
+		{PortMin: 20000, PortMax: 60000, CredMode: credModeFixed},
+		{PortMin: 20000, PortMax: 60000, CredMode: credModeFixed, FixedUser: "has space", FixedPass: "fixedpass123"},
+	}
+	for _, s := range invalid {
+		if err := validateSocksSettings(s); err == nil {
+			t.Fatal("invalid settings accepted", s)
+		}
+	}
+}
+
+func TestSocksSettingsNewCredModes(t *testing.T) {
+	fixed := socksSettings{PortMin: 20000, PortMax: 60000, CredMode: credModeFixed, FixedUser: "fixeduser", FixedPass: "fixedpass123"}
+	for i := 0; i < 3; i++ {
+		cred, err := fixed.newCred()
+		if err != nil || cred != fixed.fixedCred() {
+			t.Fatal("fixed mode must always return the fixed credential", cred, err)
+		}
+	}
+	random := defaultSocksSettings()
+	a, err := random.newCred()
+	if err != nil || a.User == "" || a.Pass == "" {
+		t.Fatal("random mode must generate a credential", err)
+	}
+	b, err := random.newCred()
+	if err != nil || a == b {
+		t.Fatal("random mode must generate distinct credentials", err)
+	}
+}
+
+func TestFreePortInRange(t *testing.T) {
+	taken := map[int]bool{}
+	for p := 24100; p <= 24110; p++ {
+		taken[p] = true
+	}
+	delete(taken, 24107)
+	port, err := freePortInRange(taken, 24100, 24110)
+	if err != nil || port != 24107 {
+		t.Fatal("must find the only untaken port in range", port, err)
+	}
+	taken[24107] = true
+	if _, err := freePortInRange(taken, 24100, 24110); err == nil {
+		t.Fatal("full range must error")
+	}
+	if _, err := freePortInRange(taken, 30000, 20000); err == nil {
+		t.Fatal("inverted range must error")
+	}
+}
+
+func TestEnsurePublicSocksForceOpensInRange(t *testing.T) {
+	n, runtime, ts := rollbackFixture(t)
+	if err := n.ensurePublicSocks(ts, 24100, 24110); err != nil {
+		t.Fatal(err)
+	}
+	exposure := n.socksExposures()[1]
+	if exposure == nil || !exposure.Enable {
+		t.Fatal("external SOCKS must be created enabled")
+	}
+	if exposure.Port < 24100 || exposure.Port > 24110 {
+		t.Fatal("external port outside configured range", exposure.Port)
+	}
+	starts := runtime.starts
+	if err := n.ensurePublicSocks(ts, 24100, 24110); err != nil || runtime.starts != starts {
+		t.Fatal("idempotent ensure restarted Xray")
+	}
+	// A manual close is overridden by the global force-open rule,
+	// and the already assigned port is kept.
+	if err := n.setPublicSocks(ts[0], false, ts); err != nil {
+		t.Fatal(err)
+	}
+	if n.socksExposures()[1].Enable {
+		t.Fatal("manual close fixture failed")
+	}
+	if err := n.ensurePublicSocks(ts, 25000, 25010); err != nil {
+		t.Fatal(err)
+	}
+	again := n.socksExposures()[1]
+	if !again.Enable || again.Port != exposure.Port {
+		t.Fatal("force-open must re-enable without moving the port", again, exposure)
+	}
+	stored, err := loadNativeStore(n.dir)
+	if err != nil || len(stored.Inbounds) != 2 || !stored.Inbounds[1].Enable || stored.Inbounds[1].SocksSlot != 1 {
+		t.Fatal("external access not persisted", err)
+	}
+}
+
+func TestSocksSettingsSaveLoadAndProvider(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(32, dir)
+	c := &Console{m: m}
+	if err := c.loadSocksSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.socksSnapshot(); got != defaultSocksSettings() {
+		t.Fatal("absent file must yield defaults", got)
+	}
+	want := socksSettings{PortMin: 26000, PortMax: 26999, CredMode: credModeFixed, FixedUser: "fixeduser", FixedPass: "fixedpass123"}
+	if err := c.saveSocksSettings(want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "socks-settings.json")); err != nil {
+		t.Fatal("settings file not written", err)
+	}
+	m2 := NewManager(32, dir)
+	c2 := &Console{m: m2}
+	if err := c2.loadSocksSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c2.socksSnapshot(); got != want {
+		t.Fatal("settings roundtrip mismatch", got, want)
+	}
+	cred, err := m2.newSlotCred()
+	if err != nil || cred != want.fixedCred() {
+		t.Fatal("manager must use the fixed credential for new slots", cred, err)
+	}
+}
+
+func TestRestoredTunnelWithoutCredUsesProvider(t *testing.T) {
+	fixed := SocksCred{User: "fixeduser", Pass: "fixedpass123"}
+	st := &persistedState{Tunnels: []persistedTunnel{{Slot: 1, Port: 18001, HostName: "gone-node"}}}
+	tunnels, err := prepareRestoredTunnelsWithCred(st, nil, func() (SocksCred, error) { return fixed, nil })
+	if err != nil || len(tunnels) != 1 || tunnels[0].Cred != fixed {
+		t.Fatal("restored tunnel without saved cred must use provider", tunnels, err)
+	}
+	// A saved credential is identity: restore must not rotate it.
+	st.Tunnels[0].SocksUser, st.Tunnels[0].SocksPass = "saved-user", "saved-pass"
+	tunnels, err = prepareRestoredTunnelsWithCred(st, nil, func() (SocksCred, error) { return fixed, nil })
+	if err != nil || tunnels[0].Cred != (SocksCred{User: "saved-user", Pass: "saved-pass"}) {
+		t.Fatal("saved credential must be preserved on restore", tunnels, err)
+	}
+}
+
+func TestApplySocksCredsFixedThenRandom(t *testing.T) {
+	n, _, ts := rollbackFixture(t)
+	usePanel(t, n)
+	m := NewManager(32, t.TempDir())
+	second := &Tunnel{Slot: 2, Port: 17929, Status: "up", Node: Node{HostName: "b"}, Cred: SocksCred{User: "second-user", Pass: "second-pass"}}
+	m.tunnels[1] = ts[0]
+	m.tunnels[2] = second
+	c := &Console{m: m}
+
+	fixed := socksSettings{PortMin: 20000, PortMax: 60000, CredMode: credModeFixed, FixedUser: "fixeduser", FixedPass: "fixedpass123"}
+	if err := c.applySocksCreds(fixed, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, tun := range []*Tunnel{ts[0], second} {
+		if tun.credential() != fixed.fixedCred() {
+			t.Fatal("fixed mode must unify every slot", tun.Slot, tun.credential())
+		}
+	}
+	// Saving fixed again is a no-op for already unified slots.
+	if err := c.applySocksCreds(fixed, false); err != nil {
+		t.Fatal(err)
+	}
+	random := defaultSocksSettings()
+	before := []SocksCred{ts[0].credential(), second.credential()}
+	if err := c.applySocksCreds(random, false); err != nil {
+		t.Fatal(err)
+	}
+	if ts[0].credential() != before[0] || second.credential() != before[1] {
+		t.Fatal("random save without reapply must not rotate credentials")
+	}
+	if err := c.applySocksCreds(random, true); err != nil {
+		t.Fatal(err)
+	}
+	a, b := ts[0].credential(), second.credential()
+	if a == fixed.fixedCred() || b == fixed.fixedCred() || a == b || a.User == "" || b.User == "" {
+		t.Fatal("switching to random must regenerate distinct credentials", a, b)
+	}
+}

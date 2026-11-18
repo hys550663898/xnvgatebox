@@ -1271,6 +1271,57 @@
                 ><a href="advanced">接入管理 →</a>
               </div>
             </div>
+            <div class="card pad" style="margin: 20px 0">
+              <h2>外部接入设置（全局）</h2>
+              <p class="muted" style="margin: 12px 0">
+                外部端口对全部出口默认开启，不需要逐个启用。端口只从下面区间里分配；已有端口不会因为改区间而搬家。
+              </p>
+              <div class="resourcefilters" style="margin: 16px 0">
+                <label
+                  >外部端口起始<input
+                    id="socksPortMin"
+                    type="number"
+                    min="1024"
+                    max="65535"
+                    step="1"
+                /></label>
+                <label
+                  >外部端口结束<input
+                    id="socksPortMax"
+                    type="number"
+                    min="1024"
+                    max="65535"
+                    step="1"
+                /></label>
+                <label
+                  >凭据模式<select id="socksCredMode">
+                    <option value="random">全随机（每条独立）</option>
+                    <option value="fixed">全固定（全部统一）</option>
+                  </select></label
+                >
+              </div>
+              <div
+                class="resourcefilters"
+                id="socksFixedCred"
+                style="margin: 16px 0"
+                hidden
+              >
+                <label
+                  >固定用户名<input id="socksFixedUser" type="text" spellcheck="false"
+                /></label>
+                <label
+                  >固定口令<input id="socksFixedPass" type="text" spellcheck="false"
+                /></label>
+              </div>
+              <div class="actions">
+                <button class="primary" id="socksSettingsSave">
+                  保存并应用到全部出口
+                </button>
+              </div>
+              <p class="muted" style="margin-top: 12px">
+                保存即强制应用：所有出口的外部端口都会打开（包括曾手动关闭的）；切到全固定会把全部出口统一成上面的账号口令，切回全随机则全部重新随机，旧链接随之失效。服务器防火墙 / 安全组也要放行所设区间。
+              </p>
+            </div>
             <div class="tablewrap">
               <table>
                 <thead>
@@ -1795,6 +1846,8 @@
         resourcesPolling = null,
         resourceEpoch = 0,
         sstpSettingsDirty = false,
+        socksSettingsDirty = false,
+        socksSettingsLoaded = null,
         currentExit = null,
         polling = false,
         poolRefreshSubmitting = false,
@@ -2922,6 +2975,21 @@
           "primary",
           resourceTab === "sstp",
         );
+        if (summary.socks_settings && !socksSettingsDirty) {
+          const ss = summary.socks_settings;
+          socksSettingsLoaded = ss;
+          if (document.activeElement !== $("socksPortMin"))
+            $("socksPortMin").value = ss.port_min;
+          if (document.activeElement !== $("socksPortMax"))
+            $("socksPortMax").value = ss.port_max;
+          if (document.activeElement !== $("socksCredMode"))
+            $("socksCredMode").value = ss.cred_mode;
+          if (document.activeElement !== $("socksFixedUser"))
+            $("socksFixedUser").value = ss.fixed_user || "";
+          if (document.activeElement !== $("socksFixedPass"))
+            $("socksFixedPass").value = ss.fixed_pass || "";
+        }
+        $("socksFixedCred").hidden = $("socksCredMode").value !== "fixed";
         $("resourceSocksRows").innerHTML =
           exits
             .map(
@@ -2933,16 +3001,12 @@
                 "</td><td>仅本机 · " +
                 e.port +
                 "</td><td>" +
-                esc(e.public_socks?.enable ? e.public_socks.port : "未启用") +
+                esc(e.public_socks?.enable ? e.public_socks.port : "开启中") +
                 "</td><td>" +
                 badge(e.status) +
                 '</td><td><div class="actions"><button data-resource-cred="' +
                 e.slot +
-                '">查看 / 复制</button><button data-resource-toggle="' +
-                e.slot +
-                '">' +
-                (e.public_socks?.enable ? "关闭外部" : "启用外部") +
-                "</button></div></td></tr>",
+                '">查看 / 复制</button></div></td></tr>',
             )
             .join("") ||
           '<tr><td colspan="6">暂无出口，请先在出口管理中创建。</td></tr>';
@@ -3212,6 +3276,41 @@
           a.click();
           setTimeout(() => URL.revokeObjectURL(u), 1000);
         }, $("resourceExportSocks"));
+      for (const id of [
+        "socksPortMin",
+        "socksPortMax",
+        "socksCredMode",
+        "socksFixedUser",
+        "socksFixedPass",
+      ])
+        $(id).addEventListener("input", () => {
+          socksSettingsDirty = true;
+          $("socksFixedCred").hidden = $("socksCredMode").value !== "fixed";
+        });
+      $("socksSettingsSave").onclick = () =>
+        action(async () => {
+          const mode = $("socksCredMode").value,
+            body = {
+              port_min: Number($("socksPortMin").value),
+              port_max: Number($("socksPortMax").value),
+              cred_mode: mode,
+              fixed_user: $("socksFixedUser").value.trim(),
+              fixed_pass: $("socksFixedPass").value.trim(),
+              apply_creds:
+                !!socksSettingsLoaded &&
+                (socksSettingsLoaded.cred_mode !== mode ||
+                  (mode === "fixed" &&
+                    (socksSettingsLoaded.fixed_user !==
+                      $("socksFixedUser").value.trim() ||
+                      socksSettingsLoaded.fixed_pass !==
+                        $("socksFixedPass").value.trim()))),
+            };
+          const saved = await api("api/console/socks/settings", body);
+          socksSettingsLoaded = saved;
+          socksSettingsDirty = false;
+          toast("已保存并应用到全部出口");
+          await poll();
+        }, $("socksSettingsSave"));
       $("resourceCredClose").onclick = () => $("resourceCredentials").close();
       $("resourceCredCopy").onclick = () =>
         action(() => copy($("resourceCredentialURL").value));
@@ -3240,19 +3339,6 @@
             () => resourceExport([copyButton.dataset.sstpCopy], "text", true),
             copyButton,
           );
-        const toggle = e.target.closest("[data-resource-toggle]");
-        if (toggle) {
-          const row = exits.find(
-            (x) => x.slot === Number(toggle.dataset.resourceToggle),
-          );
-          return action(async () => {
-            await api("api/console/socks", {
-              slot: row.slot,
-              enabled: !row.public_socks?.enable,
-            });
-            await poll();
-          }, toggle);
-        }
         const cred = e.target.closest("[data-resource-cred]");
         if (cred) {
           const row = exits.find(
@@ -3261,7 +3347,7 @@
           $("resourceCredentialTitle").textContent = name(row) + " · SOCKS5";
           $("resourceCredentialScope").textContent = row.public_socks?.enable
             ? "外部接入已开启，使用独立外部端口。"
-            : "当前仅 VPS 本机可用，启用外部接入后才能供其他设备使用。";
+            : "外部端口正在开启，稍等片刻刷新后即可供其他设备使用。";
           $("resourceCredentialURL").value = resourceSocksURL(row);
           $("resourceCredentialUser").value = row.socks_user;
           $("resourceCredentialPass").value = row.socks_pass;

@@ -22,9 +22,67 @@ func (n *Native) socksExposures() map[int]*SocksExposure {
 	return out
 }
 
+// ensurePublicSocks 给每个出口补齐已启用的外部 SOCKS 入站。
+//
+// 与 setPublicSocks 的手动开关不同，这是全局规则的对账：缺失的按
+// portMin–portMax 区间新建，已有的只把 Enable 强制打开、端口不搬家。
+// 一批出口只在确有变化时 apply 一次，避免逐条重启 Xray。
+func (n *Native) ensurePublicSocks(tunnels []*Tunnel, portMin, portMax int) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	finish := n.beginChange()
+	defer finish()
+	used := n.store.usedPorts()
+	for _, tunnel := range tunnels {
+		used[tunnel.Port] = true
+	}
+	changed := false
+	for _, t := range tunnels {
+		found := false
+		for _, ib := range n.store.Inbounds {
+			if ib.SocksSlot == t.Slot {
+				found = true
+				if !ib.Enable {
+					ib.Enable = true
+					changed = true
+				}
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		cred := t.credential()
+		if err := validateCred(cred); err != nil {
+			return err
+		}
+		port, err := freePortInRange(used, portMin, portMax)
+		if err != nil {
+			return err
+		}
+		used[port] = true
+		n.store.Inbounds = append(n.store.Inbounds, &nativeInbound{
+			ID: n.store.NextID, Port: port, Protocol: "socks", Network: "tcp", Security: "none",
+			Remark: fmt.Sprintf("SOCKS · %02d", t.Slot), NameMode: "custom", Enable: true,
+			BoundSlot: t.Slot, SocksSlot: t.Slot,
+			Clients: []nativeClient{{Email: cred.User, Password: cred.Pass, Enable: true}},
+		})
+		n.store.NextID++
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return n.apply(tunnels)
+}
+
 // Keep the internal hand-off private. External access is a separate authenticated
 // Xray listener bound to the same stable Slot; its route never uses host-direct.
 func (n *Native) setPublicSocks(t *Tunnel, enabled bool, tunnels []*Tunnel) error {
+	return n.setPublicSocksInRange(t, enabled, tunnels, randPortMin, randPortMax)
+}
+
+func (n *Native) setPublicSocksInRange(t *Tunnel, enabled bool, tunnels []*Tunnel, portMin, portMax int) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	finish := n.beginChange()
@@ -49,7 +107,7 @@ func (n *Native) setPublicSocks(t *Tunnel, enabled bool, tunnels []*Tunnel) erro
 	for _, tunnel := range tunnels {
 		used[tunnel.Port] = true
 	}
-	port, err := freeRandomPort(used)
+	port, err := freePortInRange(used, portMin, portMax)
 	if err != nil {
 		return err
 	}
@@ -176,7 +234,8 @@ func (c *Console) apiPublicSocks(w http.ResponseWriter, r *http.Request) {
 	}
 	t.opMu.Lock()
 	defer t.opMu.Unlock()
-	if err := n.setPublicSocks(t, *req.Enabled, c.m.Tunnels()); err != nil {
+	socksCfg := c.socksSnapshot()
+	if err := n.setPublicSocksInRange(t, *req.Enabled, c.m.Tunnels(), socksCfg.PortMin, socksCfg.PortMax); err != nil {
 		writeJSON(w, 409, map[string]string{"error": firstLine(err.Error())})
 		return
 	}

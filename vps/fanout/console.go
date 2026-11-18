@@ -51,6 +51,8 @@ type Console struct {
 	check            *CheckRun
 	results          map[string]CheckResult
 	checkParallelism int
+	socksMu          sync.Mutex
+	socks            socksSettings
 	// Test seams exercise intent/persistence without creating real namespaces.
 	start  func(Node, SlotPolicy) (*Tunnel, error)
 	remove func(int) error
@@ -70,7 +72,12 @@ func newConsole(m *Manager) (*Console, error) {
 		if !ok {
 			return fmt.Errorf("自动数量管理仅用于内置 Xray 模式")
 		}
-		return n.ensureSlotInbounds(ts, host)
+		if err := n.ensureSlotInbounds(ts, host); err != nil {
+			return err
+		}
+		// 新出口在同一次对账里就带上已启用的外部 SOCKS，不等下一轮 watch。
+		s := c.socksSnapshot()
+		return n.ensurePublicSocks(ts, s.PortMin, s.PortMax)
 	}
 	c.probe = c.probeCandidate
 	if err := recoverConfigTransaction(m.workDir, consoleJournal, []string{"console.json"}); err != nil {
@@ -100,6 +107,11 @@ func newConsole(m *Manager) (*Console, error) {
 		m.recordConnectivity(r)
 	}
 	if err := c.loadCheckSettings(); err != nil {
+		return nil, err
+	}
+	// 必须赶在 restoreState 之前：恢复无凭据的旧出口时就要按全局模式补凭据。
+	if err := c.loadSocksSettings(); err != nil {
+		c.cancel()
 		return nil, err
 	}
 	if err:=c.loadAutomation();err!=nil {c.cancel();return nil,err}
@@ -277,6 +289,11 @@ func (c *Console) watch() {
 		if err := c.reconcile(); err != nil {
 			log.Printf("出口计划等待重试: %v", err)
 		}
+		// 外部 SOCKS 全部强制开启：手动关掉的也会在这一轮被重新打开，
+		// 这是全局设置定下的规则，不是逐条开关的记忆。
+		if err := c.ensureAllPublicSocks(); err != nil {
+			log.Printf("外部 SOCKS 对账失败: %v", err)
+		}
 		c.targetMu.Unlock()
 		select {
 		case <-c.ctx.Done():
@@ -324,6 +341,7 @@ func (c *Console) routes(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("/api/console/direct", c.apiHostDirect)
 	mux.HandleFunc("/api/console/socks", c.apiPublicSocks)
+	mux.HandleFunc("/api/console/socks/settings", c.apiSocksSettings)
 	mux.HandleFunc("/api/console/refresh", c.apiPoolRefresh)
 	mux.HandleFunc("/api/console/source-settings", c.apiSourceSettings)
 	mux.HandleFunc("/api/console/automation", c.apiAutomation)
@@ -473,7 +491,7 @@ func (c *Console) apiConsole(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]any{"version": version, "capacity": c.m.maxSlots, "target": target, "target_configured": plan != nil, "suggested_target": suggestedTarget, "allocated": len(view.Exits), "ready": ready, "stopped": stopped, "waiting": max(0, target-ready-stopped), "candidates": len(nodes), "pool_read_at": fetched, "pool_generated_at": generated, "pool_source": publicPoolSource(pool.Source), "automation": c.automationView(time.Now().UTC()), "default_server_name": serverName, "plan": plan, "plan_error": planErr, "refresh": refresh, "check": checkView, "check_settings": map[string]int{"parallelism": parallelism}, "results": results, "memory": memory})
+	writeJSON(w, 200, map[string]any{"version": version, "capacity": c.m.maxSlots, "target": target, "target_configured": plan != nil, "suggested_target": suggestedTarget, "allocated": len(view.Exits), "ready": ready, "stopped": stopped, "waiting": max(0, target-ready-stopped), "candidates": len(nodes), "pool_read_at": fetched, "pool_generated_at": generated, "pool_source": publicPoolSource(pool.Source), "automation": c.automationView(time.Now().UTC()), "default_server_name": serverName, "plan": plan, "plan_error": planErr, "refresh": refresh, "check": checkView, "check_settings": map[string]int{"parallelism": parallelism}, "socks_settings": c.socksSnapshot(), "results": results, "memory": memory})
 }
 
 func (c *Console) apiPoolRefresh(w http.ResponseWriter, r *http.Request) {
