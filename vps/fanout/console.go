@@ -140,9 +140,6 @@ func validateExitPlan(p *ExitPlan, limit int) error {
 	if err != nil {
 		return err
 	}
-	// 固定节点是单个 Slot 的用户指定，只属于那个 Slot；
-	// 计划模板若带上它，所有自动出口都会去抢同一个节点。
-	policy.PinnedHost = ""
 	p.Policy = policy
 	p.ServerName = strings.ToLower(strings.TrimSpace(p.ServerName))
 	if p.ServerName == "" {
@@ -220,33 +217,16 @@ func (c *Console) reconcile() error {
 			return err
 		}
 	}
-	// 固定节点出口（候选页「设为出口」）是计划之外的用户指定：
-	// 不占目标数量、数量对账也绝不移除它们，只管自动出口的增减。
 	ts := c.m.Tunnels()
 	sort.Slice(ts, func(i, j int) bool { return ts[i].Slot > ts[j].Slot })
-	auto := make([]*Tunnel, 0, len(ts))
-	for _, t := range ts {
-		if !slotPinned(t) {
-			auto = append(auto, t)
-		}
-	}
-	for len(auto) > p.Count {
-		if err := c.remove(auto[0].Slot); err != nil {
+	for len(ts) > p.Count {
+		if err := c.remove(ts[0].Slot); err != nil {
 			c.planError = "remove_failed"
 			return err
 		}
-		auto = auto[1:]
+		ts = ts[1:]
 	}
-	nonPinned := func() int {
-		n := 0
-		for _, t := range c.m.Tunnels() {
-			if !slotPinned(t) {
-				n++
-			}
-		}
-		return n
-	}
-	for nonPinned() < p.Count {
+	for len(c.m.Tunnels()) < p.Count {
 		node := Node{CountryCode: p.Policy.Country, Country: p.Policy.Country}
 		if candidates := c.m.policyCandidates(p.Policy, nil, 0); len(candidates) > 0 {
 			node = candidates[0]
@@ -269,12 +249,11 @@ func (c *Console) deleteSlot(slot int) error {
 	c.targetMu.Lock()
 	defer c.targetMu.Unlock()
 	c.m.mu.RLock()
-	victim := c.m.tunnels[slot]
+	exists := c.m.tunnels[slot] != nil
 	c.m.mu.RUnlock()
-	if victim == nil {
+	if !exists {
 		return fmt.Errorf("出口不存在")
 	}
-	pinned := slotPinned(victim)
 	// A final explicit deletion of legacy Slots must not become an untouched
 	// instance that the new default would initialize again on the next refresh.
 	if c.plan == nil && len(c.m.Tunnels()) == 1 && currentPanelMode() == "native" {
@@ -284,12 +263,9 @@ func (c *Console) deleteSlot(slot int) error {
 		return c.reconcile()
 	}
 	// Save the new target before deletion; a crash resumes the explicit decrease.
-	// 固定节点出口不在目标数量之内，删它不动 Count。
 	if c.plan != nil {
 		p := *c.plan
-		if !pinned {
-			p.Count = max(0, c.plan.Count-1)
-		}
+		p.Count = max(0, c.plan.Count-1)
 		p.RemoveSlot = slot
 		if p.Count < 0 {
 			return fmt.Errorf("出口不存在")
@@ -375,7 +351,6 @@ func (c *Console) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/console/source-settings", c.apiSourceSettings)
 	mux.HandleFunc("/api/console/automation", c.apiAutomation)
 	mux.HandleFunc("/api/console/check/settings", c.apiCheckSettings)
-	mux.HandleFunc("/api/console/promote", c.apiPromoteCandidate)
 	mux.HandleFunc("/api/console/check", c.apiCheck)
 	mux.HandleFunc("/api/console/check/cancel", c.apiCheckCancel)
 	mux.HandleFunc("/api/console/qr", func(w http.ResponseWriter, r *http.Request) {

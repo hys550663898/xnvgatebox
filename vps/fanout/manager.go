@@ -441,9 +441,6 @@ func (m *Manager) tryNode(t *Tunnel) error {
 // 让重连悄悄换回去等于撤销了他的操作。
 func (m *Manager) candidatesFor(t *Tunnel) []Node {
 	policy := t.policySnapshot()
-	if policy.PinnedHost != "" {
-		return m.pinnedCandidates(t, policy.PinnedHost)
-	}
 	t.mu.Lock()
 	first := t.Node
 	t.mu.Unlock()
@@ -487,34 +484,6 @@ func (m *Manager) candidatesFor(t *Tunnel) []Node {
 		}
 	}
 	return out
-}
-
-// pinnedCandidates 是固定节点 Slot 的候选列表：永远只有被固定的那一个。
-// 节点暂时不在候选池里时用 Slot 自己保存的节点（含 OpenVPN 配置）兜底——
-// 候选池刷新会淘汰旧条目，但用户明确选定的节点不该因此被悄悄换掉。
-// 冷却中的固定节点本轮跳过，靠外层退避重试，不在本轮内反复拨号。
-func (m *Manager) pinnedCandidates(t *Tunnel, host string) []Node {
-	t.mu.Lock()
-	current := t.Node
-	until := t.cooldown[host]
-	t.mu.Unlock()
-	if time.Now().Before(until) {
-		return nil
-	}
-	if m.nodeInUse(host, t.Slot) {
-		return nil
-	}
-	if current.HostName == host {
-		return []Node{current}
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, n := range m.nodes {
-		if n.HostName == host {
-			return []Node{n}
-		}
-	}
-	return nil
 }
 
 // Stop 停掉运行态，保留 Slot 身份、端口和策略。
@@ -603,9 +572,6 @@ func (m *Manager) Swap(slot int) error {
 	if t.Status == "starting" {
 		return fmt.Errorf("这个出口正在连接中，稍等一下")
 	}
-	if t.policySnapshot().PinnedHost != "" {
-		return fmt.Errorf("该出口已固定到指定节点，不能自动换节点；如需更换，请删除后对新节点重新「设为出口」")
-	}
 
 	node, err := m.pickSwapTarget(t)
 	if err != nil {
@@ -658,15 +624,6 @@ func (m *Manager) SwapTo(slot int, host string) error {
 	oldHost := t.Node.HostName
 	if oldHost == node.HostName {
 		return fmt.Errorf("这个节点已经是当前出口")
-	}
-	// 固定节点 Slot 被手动切到新节点时，固定目标跟着走，
-	// 否则重连逻辑会把用户刚选的新节点又换回旧的固定节点。
-	if policy.PinnedHost != "" {
-		t.mu.Lock()
-		if t.Policy != nil {
-			t.Policy.PinnedHost = node.HostName
-		}
-		t.mu.Unlock()
 	}
 	t.rememberSwap(oldHost)
 	t.rememberSwap(node.HostName)
