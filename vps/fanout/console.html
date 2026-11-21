@@ -1185,7 +1185,7 @@
           <div class="notice">
             清单数量是本次来源返回并经格式校验的候选数量，可能随时间变化。未测试不等于不可用；来源地区与实际出口地区分开展示。检测会建立临时连接并核验
             HTTPS
-            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。点候选行的「设为出口」，在弹窗里选一个已有出口替换成该节点：端口、凭据和订阅不变，替换后自动重连，就绪后订阅里就是新节点。检测通过后还会按出口 IP 到 iptest.us 查询网络类型与综合评分（评分越低越纯净），显示在出口 IP 下方；查询失败不影响检测结果。
+            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。点候选行的「设为出口」，在弹窗里选一个已有出口替换成该节点：端口、凭据和订阅不变，替换后自动重连，就绪后订阅里就是新节点。检测通过后还会按出口 IP 到 iptest.us 查询网络类型与综合评分（评分越低越纯净），显示在节点域名下方；查询失败不影响检测结果。
           </div>
           <div id="poolSourceSummary" class="notice"></div>
           <div id="automationSummary" class="notice"></div>
@@ -2589,7 +2589,11 @@
                   esc(n.ip || n.hostname) +
                   "<small>" +
                   esc(n.hostname) +
-                  "</small></td><td>" +
+                  "</small>" +
+                  (r.iptest
+                    ? "<small>iptest " + esc(iptestText(r.iptest)) + "</small>"
+                    : "") +
+                  "</td><td>" +
                   esc(country(n.country_code)) +
                   "</td><td>" +
                   esc(r.actual_ip || live?.exit_ip || "—") +
@@ -2601,11 +2605,7 @@
                         ? country(verified(live))
                         : "",
                   ) +
-                  "</small>" +
-                  (r.iptest
-                    ? "<small>iptest " + esc(iptestText(r.iptest)) + "</small>"
-                    : "") +
-                  "</td><td>" +
+                  "</small></td><td>" +
                   badge(
                     r.status === "queued" && r.priority
                       ? "priority_queued"
