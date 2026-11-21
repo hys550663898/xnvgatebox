@@ -1169,7 +1169,7 @@
           <div class="notice">
             清单数量是本次来源返回并经格式校验的候选数量，可能随时间变化。未测试不等于不可用；来源地区与实际出口地区分开展示。检测会建立临时连接并核验
             HTTPS
-            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。
+            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。点候选行的「设为出口」，可把该节点建成一个固定出口：不占目标数量、不会被自动换掉，连不上时只重试它本身，就绪后自动进入订阅。
           </div>
           <div id="poolSourceSummary" class="notice"></div>
           <div id="automationSummary" class="notice"></div>
@@ -2141,7 +2141,11 @@
                   lat +
                   "</b></span><span>目标 <b>" +
                   esc(
-                    e.policy?.country ? country(e.policy.country) : "自动选择",
+                    e.policy?.pinned_host
+                      ? "固定节点"
+                      : e.policy?.country
+                        ? country(e.policy.country)
+                        : "自动选择",
                   ) +
                   "</b></span><span>入站 <b>" +
                   esc(ib.map((i) => i.port).join(" / ") || "等待绑定") +
@@ -2513,7 +2517,8 @@
                 const r = nodeResult(n),
                   live = exits.find(
                     (e) => e.host === n.hostname && e.status === "up",
-                  );
+                  ),
+                  inUse = exits.some((e) => e.host === n.hostname);
                 return (
                   '<tr><td><input type="checkbox" data-node="' +
                   esc(n.hostname) +
@@ -2561,7 +2566,13 @@
                     : "") +
                   ">" +
                   checkButtonLabel(r) +
-                  "</button></td></tr>"
+                  "</button> " +
+                  (inUse
+                    ? "<button disabled>已是出口</button>"
+                    : '<button data-action="promoteNode" data-host="' +
+                      esc(n.hostname) +
+                      '">设为出口</button>') +
+                  "</td></tr>"
                 );
               })
               .join("")
@@ -3640,6 +3651,11 @@
           }
           if (a === "testNode")
             await check({ hosts: [b.dataset.host], priority: true });
+          if (a === "promoteNode") {
+            await api("api/console/promote", { host: b.dataset.host });
+            toast("已设为出口，正在连接该节点");
+            await poll();
+          }
           if (a === "cancelCheck") {
             await api("api/console/check/cancel", {});
             toast("正在取消并清理临时连接");

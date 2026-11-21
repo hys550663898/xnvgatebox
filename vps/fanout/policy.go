@@ -24,6 +24,10 @@ type SlotPolicy struct {
 	AllowedASN       []string `json:"allowed_asn"`
 	BlockedASN       []string `json:"blocked_asn"`
 	MaximumLatencyMS int      `json:"maximum_latency_ms"`
+	// PinnedHost 把这个 Slot 固定到用户指定的候选节点：候选选择只尝试它，
+	// 连不上就退避后重试它本身，绝不自动换到其他节点。由候选页「设为出口」
+	// 写入；计划（ExitPlan）的模板策略不带这个字段。
+	PinnedHost string `json:"pinned_host,omitempty"`
 }
 
 var policyASN = regexp.MustCompile(`^AS[0-9]+$`)
@@ -58,6 +62,10 @@ func normalizePolicy(p SlotPolicy) (SlotPolicy, error) {
 	}
 	if p.MaximumLatencyMS < 0 || p.MaximumLatencyMS > 120000 {
 		return p, fmt.Errorf("延迟上限必须为 0..120000 毫秒，0 表示不限")
+	}
+	p.PinnedHost = strings.TrimSpace(p.PinnedHost)
+	if len(p.PinnedHost) > 253 || strings.ContainsAny(p.PinnedHost, " \t\r\n\x00") {
+		return p, fmt.Errorf("固定节点名称无效")
 	}
 	lists := []*[]string{&p.AllowedIPTypes, &p.PreferredISP, &p.AllowedISP, &p.BlockedISP, &p.AllowedASN, &p.BlockedASN}
 	for i, ptr := range lists {
