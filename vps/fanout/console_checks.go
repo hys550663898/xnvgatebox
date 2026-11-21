@@ -248,6 +248,10 @@ func (c *Console) checkExit(ctx context.Context, slot int, expectedHost string, 
 		}
 		result.IPType = v.Egress.IPType
 	}
+	// Same iptest enrichment as fresh candidate probes: re-checking a
+	// node that is already an exit must show the IP info too.
+	progress("iptest")
+	result.IPTest = lookupIPTest(ctx, result.ActualIP)
 	return result
 }
 
