@@ -30,6 +30,7 @@ type CheckResult struct {
 	ActualIP   string         `json:"actual_ip,omitempty"`
 	Country    string         `json:"country,omitempty"`
 	IPType     string         `json:"ip_type,omitempty"`
+	IPTest     *IPTestInfo    `json:"iptest,omitempty"`
 	LatencyMS  float64        `json:"latency_ms,omitempty"`
 	CheckedAt  time.Time      `json:"checked_at"`
 	ProfileSHA string         `json:"profile_sha256"`
@@ -184,6 +185,10 @@ func (c *Console) probeCandidate(parent context.Context, node Node, slot int, pr
 	}
 	t.mu.Unlock()
 	result.Status = "passed"
+	// Best-effort enrichment: iptest.us network type and composite
+	// score for the verified exit IP. A miss never changes the result.
+	progress("iptest")
+	result.IPTest = lookupIPTest(ctx, result.ActualIP)
 	return result
 }
 
@@ -247,7 +252,7 @@ func (c *Console) checkExit(ctx context.Context, slot int, expectedHost string, 
 }
 
 type CheckRequest struct {
-	scheduled bool
+	scheduled   bool
 	Kind        string   `json:"kind"`
 	Hosts       []string `json:"hosts"`
 	Slots       []int    `json:"slots"`
@@ -364,7 +369,10 @@ func (c *Console) startCheck(in CheckRequest) (*CheckRun, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(c.ctx)
-	if err:=c.automationCheckStarted(in.scheduled);err!=nil {cancel();return nil,err}
+	if err := c.automationCheckStarted(in.scheduled); err != nil {
+		cancel()
+		return nil, err
+	}
 	job := &CheckRun{ID: hex.EncodeToString(buf), Status: "running", Kind: "checks", Items: items, Total: len(items), Parallelism: in.Parallelism, cancel: cancel, ctx: ctx, finished: make(chan struct{}), wake: make(chan struct{}, 1), nodes: byHost}
 	c.check = job
 	go c.runChecks(ctx, job)
@@ -374,13 +382,15 @@ func (c *Console) startCheck(in CheckRequest) (*CheckRun, error) {
 // One dispatcher owns all running diagnostic identities. Manual items can join
 // a batch and take the next free permit without exceeding its configured limit.
 func (c *Console) runChecks(ctx context.Context, j *CheckRun) {
-	dispatchCheckRun(ctx, j, &c.checksMu, func(index, slot int, item CheckResult, node Node) { c.runCheckItem(ctx, j, index, item, node, slot) },func(){c.automationCheckFinished(j)})
+	dispatchCheckRun(ctx, j, &c.checksMu, func(index, slot int, item CheckResult, node Node) { c.runCheckItem(ctx, j, index, item, node, slot) }, func() { c.automationCheckFinished(j) })
 }
 
 func dispatchCheckRun(ctx context.Context, j *CheckRun, ownerMu *sync.Mutex, runItem func(int, int, CheckResult, Node), onComplete ...func()) {
 	defer close(j.finished)
 	defer j.cancel()
-	if len(onComplete)>0 {defer onComplete[0]()}
+	if len(onComplete) > 0 {
+		defer onComplete[0]()
+	}
 	finished := make(chan int, j.Parallelism)
 	active := map[int]bool{}
 	cancelSignal := ctx.Done()
