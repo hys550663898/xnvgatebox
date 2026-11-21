@@ -679,6 +679,22 @@
       .checks label {
         font-size: 12px;
       }
+      .promoteslot {
+        display: block;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        margin-bottom: 8px;
+        cursor: pointer;
+      }
+      .promoteslot small {
+        display: block;
+        margin-top: 2px;
+      }
+      .promoteslot:has(input:disabled) {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
       .nameedit {
         padding: 12px 0;
         border-top: 1px solid var(--line);
@@ -1169,7 +1185,7 @@
           <div class="notice">
             清单数量是本次来源返回并经格式校验的候选数量，可能随时间变化。未测试不等于不可用；来源地区与实际出口地区分开展示。检测会建立临时连接并核验
             HTTPS
-            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。
+            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。点候选行的「设为出口」，在弹窗里选一个已有出口替换成该节点：端口、凭据和订阅不变，替换后自动重连，就绪后订阅里就是新节点。
           </div>
           <div id="poolSourceSummary" class="notice"></div>
           <div id="automationSummary" class="notice"></div>
@@ -1675,6 +1691,30 @@
         </div>
       </form>
     </dialog>
+    <dialog id="promoteDialog" aria-labelledby="promoteTitle">
+      <form id="promoteForm">
+        <div class="dialoghead">
+          <h2 id="promoteTitle">设为出口</h2>
+          <button type="button" data-close="promoteDialog" aria-label="关闭">
+            ×
+          </button>
+        </div>
+        <p id="promoteCandidate"></p>
+        <div class="field">
+          <label>替换哪个已有出口？</label>
+          <div id="promoteSlots"></div>
+          <small
+            >替换会中断被选中出口的当前连接，随后按新节点自动重连；端口、凭据和订阅保持不变。</small
+          >
+        </div>
+        <div class="dialogfoot">
+          <button type="button" data-close="promoteDialog">取消</button
+          ><button class="primary" type="submit" id="promoteConfirm">
+            确认替换
+          </button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="exitDialog" aria-labelledby="exitTitle">
       <div class="dialoghead">
         <h2 id="exitTitle">出口设置</h2>
@@ -1883,6 +1923,7 @@
         socksSettingsDirty = false,
         socksSettingsLoaded = null,
         currentExit = null,
+        promoteHost = "",
         polling = false,
         poolRefreshSubmitting = false,
         poolRefreshEpoch = 0,
@@ -2513,7 +2554,8 @@
                 const r = nodeResult(n),
                   live = exits.find(
                     (e) => e.host === n.hostname && e.status === "up",
-                  );
+                  ),
+                  inUse = exits.some((e) => e.host === n.hostname);
                 return (
                   '<tr><td><input type="checkbox" data-node="' +
                   esc(n.hostname) +
@@ -2561,7 +2603,13 @@
                     : "") +
                   ">" +
                   checkButtonLabel(r) +
-                  "</button></td></tr>"
+                  "</button> " +
+                  (inUse
+                    ? "<button disabled>已是出口</button>"
+                    : '<button data-action="promoteNode" data-host="' +
+                      esc(n.hostname) +
+                      '">设为出口</button>') +
+                  "</td></tr>"
                 );
               })
               .join("")
@@ -3531,6 +3579,76 @@
           "按服务器资源和上游供给设置数量。设为 0 会移除全部活动出口；端口或地址不足时会显示原因。";
         $("targetDialog").showModal();
       }
+      function openPromote(host) {
+        promoteHost = host;
+        const node = nodes.find((n) => n.hostname === host) || {};
+        $("promoteCandidate").textContent =
+          "把候选 " +
+          (node.ip || host) +
+          "（" +
+          country(node.country_code) +
+          "）设为出口，替换下面选中的那个：";
+        const sorted = exits.slice().sort((a, b) => a.slot - b.slot);
+        let firstEnabled = "";
+        $("promoteSlots").innerHTML = sorted.length
+          ? sorted
+              .map((e) => {
+                let reason = "";
+                if (e.host === host) reason = "已是此节点";
+                else if (e.status === "stopped") reason = "已停止，请先启动";
+                else if (e.status === "starting") reason = "正在连接中";
+                else if (
+                  e.policy?.country &&
+                  node.country_code &&
+                  e.policy.country !== node.country_code
+                )
+                  reason = "目标国家 " + country(e.policy.country) + " 不符";
+                const disabled = reason !== "";
+                if (!disabled && !firstEnabled) firstEnabled = String(e.slot);
+                return (
+                  '<label class="promoteslot"><input type="radio" name="promoteSlot" value="' +
+                  e.slot +
+                  '"' +
+                  (disabled ? " disabled" : "") +
+                  "> 出口 " +
+                  String(e.slot).padStart(2, "0") +
+                  " · " +
+                  esc(e.host || "等待节点") +
+                  "<small>" +
+                  esc(
+                    country(e.policy?.country || e.region || "") +
+                      " · " +
+                      (e.status === "up"
+                        ? "就绪 " + (e.exit_ip || "")
+                        : e.status),
+                  ) +
+                  (reason ? " · " + esc(reason) : "") +
+                  "</small></label>"
+                );
+              })
+              .join("")
+          : '<p class="notice">当前没有可替换的出口，请先在「管理出口数量」里创建出口。</p>';
+        // 预选第一个可替换的；优先选没在正常工作的（替换它没有损失）。
+        const idle = sorted.find(
+          (e) =>
+            e.host !== host &&
+            !["stopped", "starting", "up"].includes(e.status) &&
+            !(
+              e.policy?.country &&
+              node.country_code &&
+              e.policy.country !== node.country_code
+            ),
+        );
+        const pick = idle ? String(idle.slot) : firstEnabled;
+        if (pick) {
+          const radio = document.querySelector(
+            '[name=promoteSlot][value="' + pick + '"]',
+          );
+          if (radio) radio.checked = true;
+        }
+        $("promoteConfirm").disabled = !firstEnabled;
+        $("promoteDialog").showModal();
+      }
       function openExit(slot) {
         currentExit = exits.find((e) => e.slot === slot);
         if (!currentExit) return;
@@ -3640,6 +3758,7 @@
           }
           if (a === "testNode")
             await check({ hosts: [b.dataset.host], priority: true });
+          if (a === "promoteNode") openPromote(b.dataset.host);
           if (a === "cancelCheck") {
             await api("api/console/check/cancel", {});
             toast("正在取消并清理临时连接");
@@ -3673,6 +3792,23 @@
             await poll();
           }
         }, b);
+      });
+      $("promoteForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        action(async () => {
+          const sel = document.querySelector("[name=promoteSlot]:checked");
+          if (!sel) throw Error("请选择要替换的出口");
+          await api(
+            "api/replace?slot=" +
+              sel.value +
+              "&host=" +
+              encodeURIComponent(promoteHost),
+            {},
+          );
+          $("promoteDialog").close();
+          toast("正在把出口 " + sel.value + " 切换到该节点");
+          await poll();
+        }, e.submitter);
       });
       $("targetForm").addEventListener("submit", (e) => {
         e.preventDefault();
