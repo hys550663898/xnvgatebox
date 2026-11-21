@@ -1965,8 +1965,8 @@
       }
       function iptestText(t) {
         const parts = [];
-        if (t.kind)
-          parts.push(t.kind + (t.origin ? "·" + t.origin : ""));
+        if (t.kind) parts.push(t.kind);
+        if (t.usage) parts.push(t.usage);
         if (t.composite != null)
           parts.push("综合 " + t.composite + " " + iptestBand(t.composite));
         return parts.join(" · ");

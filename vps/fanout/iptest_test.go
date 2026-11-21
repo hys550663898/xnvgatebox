@@ -40,7 +40,7 @@ func TestLookupIPTestParsesReport(t *testing.T) {
 			t.Errorf("unexpected lookup ip %q", body.CheckYourIP)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"ok":true,"ip":"73.162.12.34","type":{"kind":"家庭宽带","origin":"原生 IP"},"risk":{"score":16,"source":"scamalytics.com"},"composite":5}`)
+		fmt.Fprint(w, `{"ok":true,"ip":"73.162.12.34","type":{"kind":"家庭宽带","origin":"原生 IP"},"risk":{"score":16,"source":"scamalytics.com","vpn":false,"proxy":false,"tor":false,"relay":false},"composite":5}`)
 	}))
 	defer srv.Close()
 	resetIPTestState(t, srv.URL)
@@ -49,7 +49,7 @@ func TestLookupIPTestParsesReport(t *testing.T) {
 	if info == nil {
 		t.Fatal("expected iptest info")
 	}
-	if info.Kind != "家庭宽带" || info.Origin != "原生 IP" {
+	if info.Kind != "家庭宽带" || info.Usage != "优质网络" {
 		t.Fatalf("unexpected type %+v", info)
 	}
 	if info.Composite == nil || *info.Composite != 5 {
@@ -61,6 +61,26 @@ func TestLookupIPTestParsesReport(t *testing.T) {
 	// Second lookup of the same IP must be served from cache.
 	if again := lookupIPTest(context.Background(), "73.162.12.34"); again == nil || hits.Load() != 1 {
 		t.Fatalf("expected cache hit, server hits=%d again=%v", hits.Load(), again)
+	}
+}
+
+func TestIPTestUsageClassification(t *testing.T) {
+	cases := []struct {
+		vpn, proxy, tor, relay bool
+		want                   string
+	}{
+		{false, false, false, false, "优质网络"},
+		{true, false, false, false, "VPN"},
+		{false, true, false, false, "代理"},
+		{false, false, true, false, "Tor"},
+		{false, false, false, true, "中继"},
+		{true, true, false, false, "代理"},
+		{true, true, true, true, "Tor"},
+	}
+	for _, c := range cases {
+		if got := iptestUsage(c.vpn, c.proxy, c.tor, c.relay); got != c.want {
+			t.Errorf("iptestUsage(%v,%v,%v,%v) = %q, want %q", c.vpn, c.proxy, c.tor, c.relay, got, c.want)
+		}
 	}
 }
 

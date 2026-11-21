@@ -13,14 +13,33 @@ import (
 )
 
 // IPTestInfo is the subset of the iptest.us report shown next to a
-// candidate: the network type and the composite score. The composite
-// score is a risk-style score from 0 to 100 where lower is cleaner.
+// candidate: the network type, a usage classification derived from
+// the report's anonymizer flags (优质网络 / VPN / 代理 / Tor / 中继),
+// and the composite score. The composite score is a risk-style score
+// from 0 to 100 where lower is cleaner.
 type IPTestInfo struct {
 	Kind      string `json:"kind,omitempty"`
-	Origin    string `json:"origin,omitempty"`
+	Usage     string `json:"usage,omitempty"`
 	Composite *int   `json:"composite,omitempty"`
 	RiskScore *int   `json:"risk_score,omitempty"`
 	Source    string `json:"source,omitempty"`
+}
+
+// iptestUsage classifies an exit IP by what it is used as. An address
+// with no anonymizer flags is a plain quality network endpoint.
+func iptestUsage(vpn, proxy, tor, relay bool) string {
+	switch {
+	case tor:
+		return "Tor"
+	case proxy:
+		return "代理"
+	case vpn:
+		return "VPN"
+	case relay:
+		return "中继"
+	default:
+		return "优质网络"
+	}
 }
 
 var iptestEndpoint = "https://iptest.us/api/lookup"
@@ -103,12 +122,15 @@ func lookupIPTest(ctx context.Context, ip string) *IPTestInfo {
 	var payload struct {
 		OK   bool `json:"ok"`
 		Type struct {
-			Kind   string `json:"kind"`
-			Origin string `json:"origin"`
+			Kind string `json:"kind"`
 		} `json:"type"`
 		Risk struct {
 			Score  *int   `json:"score"`
 			Source string `json:"source"`
+			VPN    bool   `json:"vpn"`
+			Proxy  bool   `json:"proxy"`
+			Tor    bool   `json:"tor"`
+			Relay  bool   `json:"relay"`
 		} `json:"risk"`
 		Composite *int `json:"composite"`
 	}
@@ -117,7 +139,7 @@ func lookupIPTest(ctx context.Context, ip string) *IPTestInfo {
 	}
 	info := &IPTestInfo{
 		Kind:      payload.Type.Kind,
-		Origin:    payload.Type.Origin,
+		Usage:     iptestUsage(payload.Risk.VPN, payload.Risk.Proxy, payload.Risk.Tor, payload.Risk.Relay),
 		Composite: payload.Composite,
 		RiskScore: payload.Risk.Score,
 		Source:    payload.Risk.Source,
