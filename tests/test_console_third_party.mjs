@@ -80,6 +80,7 @@ const old = pending(),
 let gets = 0;
 const s = vm.createContext({
   thirdEpoch: 0,
+  revealedThirdIPTest: new Set(),
   thirdProxies: [{ id: 10, check: { status: "not_tested" } }],
   thirdCountries: [],
   thirdSubmitting: new Set(),
@@ -127,6 +128,7 @@ const ui = vm.createContext({
     {id: 10, name: 'nov proxy-los', enabled: true, entry_port: 30110, subscribe: true, check: {status: "not_tested"}},
   ],
   thirdSubmitting: new Set(), types: {unknown: "未知 / unknown"}, labels: {},
+  thirdIPTestLine: () => "",
   esc: s => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
   country: code => code, date: () => "demo-time", badge: status => `[${status}]`, checkButtonLabel: r => r.status,
 });

@@ -25,16 +25,17 @@ type ThirdPartyProxy struct {
 }
 
 type ThirdPartyRecord struct {
-	Status    string    `json:"status"`
-	Code      string    `json:"code,omitempty"`
-	Digest    string    `json:"digest,omitempty"`
-	ActualIP  string    `json:"actual_ip,omitempty"`
-	LatencyMS float64   `json:"latency_ms,omitempty"`
-	Country   string    `json:"country,omitempty"`
-	City      string    `json:"city,omitempty"`
-	IPType    string    `json:"ip_type"`
-	CheckedAt time.Time `json:"checked_at,omitempty"`
-	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	Status    string      `json:"status"`
+	Code      string      `json:"code,omitempty"`
+	Digest    string      `json:"digest,omitempty"`
+	ActualIP  string      `json:"actual_ip,omitempty"`
+	LatencyMS float64     `json:"latency_ms,omitempty"`
+	Country   string      `json:"country,omitempty"`
+	City      string      `json:"city,omitempty"`
+	IPType    string      `json:"ip_type"`
+	IPTest    *IPTestInfo `json:"iptest,omitempty"`
+	CheckedAt time.Time   `json:"checked_at,omitempty"`
+	ExpiresAt time.Time   `json:"expires_at,omitempty"`
 }
 
 func cleanThirdParty(p ThirdPartyProxy) ThirdPartyProxy {

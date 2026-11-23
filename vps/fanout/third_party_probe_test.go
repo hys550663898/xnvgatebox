@@ -109,3 +109,36 @@ func TestThirdPartyLiveSupplierProbe(t *testing.T) {
 	}
 	t.Log("supplier SOCKS5, two HTTPS echoes, HTTPS content, and wrong-password rejection passed")
 }
+
+func TestEnrichThirdPartyIPTest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"ok":true,"ip":"73.162.12.34","type":{"kind":"家庭宽带","origin":"原生 IP"},"risk":{"score":16,"source":"scamalytics.com","vpn":true,"proxy":false,"tor":false,"relay":false},"composite":20}`)
+	}))
+	defer srv.Close()
+	resetIPTestState(t, srv.URL)
+
+	passed := ThirdPartyRecord{Status: "passed", ActualIP: "73.162.12.34", IPType: "unknown"}
+	enrichThirdPartyIPTest(context.Background(), &passed)
+	if passed.IPTest == nil {
+		t.Fatal("passed record must carry iptest info")
+	}
+	if passed.IPTest.Kind != "家庭宽带" || passed.IPTest.Usage != "VPN" {
+		t.Fatalf("unexpected iptest info %+v", passed.IPTest)
+	}
+	if passed.IPTest.Composite == nil || *passed.IPTest.Composite != 20 {
+		t.Fatalf("unexpected composite %+v", passed.IPTest.Composite)
+	}
+
+	failed := ThirdPartyRecord{Status: "failed", ActualIP: "73.162.12.34", IPType: "unknown"}
+	enrichThirdPartyIPTest(context.Background(), &failed)
+	if failed.IPTest != nil {
+		t.Fatal("failed record must not be enriched")
+	}
+
+	noIP := ThirdPartyRecord{Status: "passed", IPType: "unknown"}
+	enrichThirdPartyIPTest(context.Background(), &noIP)
+	if noIP.IPTest != nil {
+		t.Fatal("record without an exit IP must not be enriched")
+	}
+}

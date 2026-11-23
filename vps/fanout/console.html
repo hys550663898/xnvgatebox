@@ -1185,7 +1185,7 @@
           <div class="notice">
             清单数量是本次来源返回并经格式校验的候选数量，可能随时间变化。未测试不等于不可用；来源地区与实际出口地区分开展示。检测会建立临时连接并核验
             HTTPS
-            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。点候选行的「设为出口」，在弹窗里选一个已有出口替换成该节点：端口、凭据和订阅不变，替换后自动重连，就绪后订阅里就是新节点。检测通过后还会按出口 IP 到 iptest.us 查询网络类型与综合评分（评分越低越纯净），显示在节点域名下方；查询失败不影响检测结果。
+            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。点候选行的「设为出口」，在弹窗里选一个已有出口替换成该节点：端口、凭据和订阅不变，替换后自动重连，就绪后订阅里就是新节点。检测通过后还会按出口 IP 到 iptest.us 查询网络类型与综合评分（评分越低越纯净），显示在节点域名下方；查询失败不影响检测结果。筛选栏可按网络类型（优质网络 / VPN / 代理）过滤，未检测或未取得 IP 信息的节点不计入该筛选。出口管理页的出口卡片在点过该出口的「检测」后，也会在 IP 下方显示同一行信息。
           </div>
           <div id="poolSourceSummary" class="notice"></div>
           <div id="automationSummary" class="notice"></div>
@@ -1204,6 +1204,11 @@
               <option value="failed">未通过</option>
               <option value="not_tested">未检测</option>
               <option value="stale">结果已过期</option></select
+            ><select id="typeFilter" aria-label="筛选网络类型">
+              <option value="">所有网络类型</option>
+              <option value="优质网络">优质网络</option>
+              <option value="VPN">VPN</option>
+              <option value="代理">代理</option></select
             ><small id="selectionCount"></small>
           </div>
           <div class="card tablecard tablewrap">
@@ -1971,6 +1976,34 @@
           parts.push("综合 " + t.composite + " " + iptestBand(t.composite));
         return parts.join(" · ");
       }
+      // Exit cards keep their iptest line hidden until the user runs
+      // that exit's own check in this page session; a stored result
+      // from an earlier visit is not shown unprompted.
+      const revealedExitIPTest = new Set();
+      const revealedThirdIPTest = new Set();
+      function exitIPTestLine(e, checkState) {
+        if (!revealedExitIPTest.has(e.slot)) return "";
+        if (
+          !checkState ||
+          ["running", "submitting", "queued"].includes(checkState.status) ||
+          !checkState.iptest
+        )
+          return "";
+        return (
+          '<small class="iptest-line">iptest ' +
+          esc(iptestText(checkState.iptest)) +
+          "</small>"
+        );
+      }
+      function thirdIPTestLine(p, r) {
+        if (!revealedThirdIPTest.has(p.id)) return "";
+        if (!r || r.status === "running" || !r.iptest) return "";
+        return (
+          '<small class="iptest-line">iptest ' +
+          esc(iptestText(r.iptest)) +
+          "</small>"
+        );
+      }
       const types = {
         strict_residential: "确认住宅",
         likely_residential: "疑似住宅",
@@ -2198,7 +2231,9 @@
                   (e.status === "starting" ? "<small>" + esc(phases[e.phase] || "准备建连") + "</small>" : "") +
                   '</div><div class="ip">' +
                   esc(e.status === "up" ? e.exit_ip || "核验中" : "等待连接") +
-                  "</div><small>" +
+                  "</div>" +
+                  exitIPTestLine(e, checkState) +
+                  "<small>" +
                   esc(types[e.egress?.ip_type] || "未知 / unknown") +
                   '</small><small class="country-evidence">' + esc(countryEvidenceLabel(e)) + '</small><div class="details"><span>HTTPS <b>' +
                   lat +
@@ -2280,7 +2315,7 @@
               return '<article class="card exit"><div class="exithead"><div><h2>' + esc(p.name) +
                 '</h2><small>自定义 · SOCKS5</small></div><span class="badge">' + (p.enabled ? "已启用" : "已停用") +
                 '</span></div><small>最近实测出口</small><div class="ip">' + esc(r.actual_ip || "待检测") +
-                '</div><small>' + esc(place) + ' · ' + esc(types[r.ip_type] || types.unknown) +
+                '</div>' + thirdIPTestLine(p, r) + '<small>' + esc(place) + ' · ' + esc(types[r.ip_type] || types.unknown) +
                 '</small>' + (p.country_mismatch || p.city_mismatch ? '<small class="warn">实测地区与手动标注不同</small>' : '') +
                 '<div class="details"><span>HTTPS <b>' + (r.latency_ms > 0 ? Math.round(r.latency_ms) + " ms" : "—") +
                 '</b></span><span>接入端口 <b>' + esc(p.entry_port) + '</b></span><span>订阅 <b>' +
@@ -2535,7 +2570,8 @@
       function filteredNodes() {
         const q = $("search").value.trim().toLowerCase(),
           c = $("countryFilter").value,
-          s = $("statusFilter").value;
+          s = $("statusFilter").value,
+          t = $("typeFilter").value;
         return nodes.filter(
           (n) =>
             (!q ||
@@ -2543,7 +2579,8 @@
                 .toLowerCase()
                 .includes(q)) &&
             (!c || n.country_code === c) &&
-            (!s || nodeResult(n).status === s),
+            (!s || nodeResult(n).status === s) &&
+            (!t || nodeResult(n).iptest?.usage === t),
         );
       }
       function renderNodes() {
@@ -2827,6 +2864,7 @@
         renderSubscription();
       }
       async function checkThirdParty(id) {
+        revealedThirdIPTest.add(id);
         thirdEpoch++;
         thirdSubmitting.add(id);
         renderThirdParties();
@@ -3774,11 +3812,15 @@
           if (a === "refresh") {
             await refreshPool();
           }
-          if (a === "check") await check({ slots: [slot], priority: true });
+          if (a === "check") {
+            revealedExitIPTest.add(slot);
+            await check({ slots: [slot], priority: true });
+          }
           if (a === "checkAll") {
             const slots = exits
               .filter((e) => e.status === "up")
               .map((e) => e.slot);
+            slots.forEach((s) => revealedExitIPTest.add(s));
             if (!slots.length) throw Error("当前没有就绪出口");
             await check({ kind: "exits", slots });
           }
@@ -3937,7 +3979,7 @@
           () => check({ kind: "candidates", hosts: [...selected] }),
           $("testSelected"),
         );
-      for (const id of ["search", "countryFilter", "statusFilter"])
+      for (const id of ["search", "countryFilter", "statusFilter", "typeFilter"])
         $(id).addEventListener(
           id === "search" ? "input" : "change",
           renderNodes,

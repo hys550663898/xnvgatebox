@@ -35,8 +35,22 @@ func probeThirdParty(ctx context.Context, p ThirdPartyProxy, dir string) ThirdPa
 			r.ExpiresAt = exp
 		}
 	}
+	enrichThirdPartyIPTest(ctx, &r)
 	r.CheckedAt = time.Now()
 	return r
+}
+
+// enrichThirdPartyIPTest attaches the iptest.us report for a passed
+// probe's verified exit IP, mirroring the candidate/exit checks. It is
+// best-effort: a lookup miss leaves the record without IP info and
+// never changes the probe outcome.
+func enrichThirdPartyIPTest(ctx context.Context, r *ThirdPartyRecord) {
+	if r.Status != "passed" || r.ActualIP == "" {
+		return
+	}
+	if info := lookupIPTest(ctx, r.ActualIP); info != nil {
+		r.IPTest = info
+	}
 }
 
 func thirdPartyHTTPClient(p ThirdPartyProxy) *http.Client {
