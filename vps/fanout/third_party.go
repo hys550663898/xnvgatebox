@@ -22,6 +22,9 @@ type ThirdPartyProxy struct {
 	City      string `json:"city"`
 	Remark    string `json:"remark"`
 	Subscribe bool   `json:"subscribe"`
+	// Source 为 "freepool" 表示这条记录由免费代理池 promote 生成，
+	// 不是用户在手动区添加的；手动条目恒为空。
+	Source string `json:"source,omitempty"`
 }
 
 type ThirdPartyRecord struct {
@@ -58,10 +61,24 @@ func safeProxyText(s string, max int) bool {
 }
 
 func validateThirdParty(p ThirdPartyProxy) error {
+	return validateThirdPartyMode(p, true)
+}
+
+// validateThirdPartyForSource 是内部保存/恢复路径用的变体：仅免费池
+// promote 生成的条目（Source == "freepool"，抓取到的公开代理没有凭据）
+// 允许账号密码为空；手动条目与 validateThirdParty 完全一致。
+func validateThirdPartyForSource(p ThirdPartyProxy) error {
+	return validateThirdPartyMode(p, p.Source != "freepool")
+}
+
+func validateThirdPartyMode(p ThirdPartyProxy, requireCredentials bool) error {
 	if p.Host == "" || len(p.Host) > 253 || (net.ParseIP(p.Host) == nil && !regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$`).MatchString(p.Host)) || p.Port < 1 || p.Port > 65535 {
 		return fmt.Errorf("请填写服务器域名/IP 和 1–65535 的端口，不含协议或路径")
 	}
-	if p.Username == "" || p.Password == "" || !safeProxyText(p.Username, 255) || !safeProxyText(p.Password, 255) {
+	if requireCredentials && (p.Username == "" || p.Password == "") {
+		return fmt.Errorf("SOCKS5 账号和密码不能为空、超过 255 字节或包含控制字符")
+	}
+	if !safeProxyText(p.Username, 255) || !safeProxyText(p.Password, 255) {
 		return fmt.Errorf("SOCKS5 账号和密码不能为空、超过 255 字节或包含控制字符")
 	}
 	if p.Country != "" && !regexp.MustCompile(`^[A-Z]{2}$`).MatchString(p.Country) {
@@ -157,7 +174,7 @@ func (n *Native) setThirdPartyFlag(id int, field string, value bool, tunnels []*
 
 func (n *Native) saveThirdParty(id int, p ThirdPartyProxy, enabled bool, serverName string, tunnels []*Tunnel) (int, error) {
 	p = cleanThirdParty(p)
-	if err := validateThirdParty(p); err != nil {
+	if err := validateThirdPartyForSource(p); err != nil {
 		return 0, err
 	}
 	n.mu.Lock()

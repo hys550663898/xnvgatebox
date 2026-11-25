@@ -132,7 +132,7 @@ func (n *Native) thirdPartyRows(records map[int]ThirdPartyRecord) []map[string]a
 		}
 		p := *ib.ThirdParty
 		r := thirdPartyRecord(p, records[ib.ID])
-		rows = append(rows, map[string]any{"id": ib.ID, "host": p.Host, "port": p.Port, "country": p.Country, "city": p.City, "remark": p.Remark, "enabled": ib.Enable, "subscribe": p.Subscribe, "entry_port": ib.Port, "name": thirdPartyName(ib.ID, p, records[ib.ID]), "check": r, "country_mismatch": r.Country != "" && p.Country != "" && r.Country != p.Country, "city_mismatch": r.City != "" && p.City != "" && r.City != p.City})
+		rows = append(rows, map[string]any{"id": ib.ID, "host": p.Host, "port": p.Port, "country": p.Country, "city": p.City, "remark": p.Remark, "enabled": ib.Enable, "subscribe": p.Subscribe, "source": p.Source, "entry_port": ib.Port, "name": thirdPartyName(ib.ID, p, records[ib.ID]), "check": r, "country_mismatch": r.Country != "" && p.Country != "" && r.Country != p.Country, "city_mismatch": r.City != "" && p.City != "" && r.City != p.City})
 	}
 	return rows
 }
@@ -270,6 +270,9 @@ func (s *ThirdPartyManager) apiResources(w http.ResponseWriter, r *http.Request)
 		req.Password = ib.ThirdParty.Password
 	}
 	p := cleanThirdParty(req.ThirdPartyProxy)
+	// 手动区条目的来源恒为空：不接受请求自带 freepool 标记绕过凭据校验，
+	// freepool 条目只能由候选页 promote 内部生成。
+	p.Source = ""
 	if err := validateThirdParty(p); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return

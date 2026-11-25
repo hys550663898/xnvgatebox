@@ -351,6 +351,7 @@ func (c *Console) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/console/source-settings", c.apiSourceSettings)
 	mux.HandleFunc("/api/console/automation", c.apiAutomation)
 	mux.HandleFunc("/api/console/check/settings", c.apiCheckSettings)
+	mux.HandleFunc("/api/freepool/promote", c.apiFreePoolPromote)
 	mux.HandleFunc("/api/console/check", c.apiCheck)
 	mux.HandleFunc("/api/console/check/cancel", c.apiCheckCancel)
 	mux.HandleFunc("/api/console/qr", func(w http.ResponseWriter, r *http.Request) {

@@ -44,8 +44,14 @@ type SstpEndpoint struct {
 }
 
 type Node struct {
-	SSTPCandidates    []SstpEndpoint `json:"sstp_candidates,omitempty"`
-	PoolNodeID        string         `json:"pool_node_id,omitempty"`
+	SSTPCandidates []SstpEndpoint `json:"sstp_candidates,omitempty"`
+	PoolNodeID     string         `json:"pool_node_id,omitempty"`
+	// Source 标记候选来源：空为 VPN Gate，"freepool" 为免费代理池。
+	Source string `json:"source,omitempty"`
+	// SocksHost/SocksPort 仅 freepool 节点使用：抓取到的免费 SOCKS5 地址，
+	// 这类节点没有 OpenVPN 配置，不能直接建隧道。
+	SocksHost         string         `json:"socks_host,omitempty"`
+	SocksPort         int            `json:"socks_port,omitempty"`
 	HostName          string         `json:"hostname"`
 	IP                string         `json:"ip"`
 	Country           string         `json:"country"`

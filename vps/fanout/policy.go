@@ -206,6 +206,11 @@ func (m *Manager) policyCandidates(p SlotPolicy, avoid map[string]bool, exceptSl
 		if n.HostName == "" || used[n.HostName] || avoid[n.HostName] {
 			continue
 		}
+		// 免费池节点没有 OpenVPN 配置，永远不能被自动选点拿去建隧道；
+		// 它们成为出口的唯一路径是候选页检测通过后 promote。
+		if n.Source == "freepool" {
+			continue
+		}
 		image := freshCandidateImage(n)
 		if image != nil {
 			if p.checkImage(*image) != nil {

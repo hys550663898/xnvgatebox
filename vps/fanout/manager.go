@@ -59,11 +59,37 @@ func (m *Manager) newSlotCred() (SocksCred, error) {
 	return newSocksCred()
 }
 
+// 抓取函数做成包级变量，便于测试注入；生产默认即原函数。
+var (
+	fetchNodesFunc  = fetchNodes
+	fetchFreePoolFn = fetchFreePoolNodes
+)
+
 // RefreshNodes 重新拉取节点列表。
+// VPN Gate 是主来源，失败仍返回 error；免费代理池是附加来源，
+// 启用时把抓到的节点并入候选（同名时 VPN Gate 优先），
+// 免费池抓取失败只记日志，绝不让整次刷新失败。
 func (m *Manager) RefreshNodes() (int, error) {
-	nodes, err := fetchNodes(60 * time.Second)
+	nodes, err := fetchNodesFunc(60 * time.Second)
 	if err != nil {
 		return 0, err
+	}
+	if freePoolEnabled() {
+		if extra, ferr := fetchFreePoolFn(context.Background()); ferr != nil {
+			log.Printf("免费代理池抓取失败，仅使用 VPN Gate 候选: %v", ferr)
+		} else {
+			seen := make(map[string]bool, len(nodes))
+			for _, n := range nodes {
+				seen[n.HostName] = true
+			}
+			for _, n := range extra {
+				if n.HostName == "" || seen[n.HostName] {
+					continue
+				}
+				seen[n.HostName] = true
+				nodes = append(nodes, n)
+			}
+		}
 	}
 	m.mu.Lock()
 	m.nodes = nodes
@@ -125,6 +151,9 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 }
 
 func (m *Manager) StartWithPolicy(node Node, policy SlotPolicy) (*Tunnel, error) {
+	if node.Source == "freepool" {
+		return nil, fmt.Errorf("免费池节点没有 OpenVPN 配置，不能直接建立隧道；请先检测通过，再在候选页点「设为出口」生成独立出口")
+	}
 	policy, err := normalizePolicy(policy)
 	if err != nil {
 		return nil, err

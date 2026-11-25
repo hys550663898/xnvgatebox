@@ -147,7 +147,7 @@ func validateNativeStore(st *nativeStore) error {
 			if ib.HostDirect || ib.BoundSlot != 0 || ib.BoundTo != "" || ib.SocksSlot != 0 || ib.Protocol != "vless" || ib.securityOrNone() != "reality" {
 				return fmt.Errorf("第三方代理不能同时绑定其他出口，且须使用加密接入")
 			}
-			if err := validateThirdParty(*ib.ThirdParty); err != nil {
+			if err := validateThirdPartyForSource(*ib.ThirdParty); err != nil {
 				return err
 			}
 		}

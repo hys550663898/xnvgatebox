@@ -54,7 +54,12 @@ func enrichThirdPartyIPTest(ctx context.Context, r *ThirdPartyRecord) {
 }
 
 func thirdPartyHTTPClient(p ThirdPartyProxy) *http.Client {
-	u := &url.URL{Scheme: "socks5h", Host: net.JoinHostPort(p.Host, strconv.Itoa(p.Port)), User: url.UserPassword(p.Username, p.Password)}
+	u := &url.URL{Scheme: "socks5h", Host: net.JoinHostPort(p.Host, strconv.Itoa(p.Port))}
+	// 无凭据代理（免费池）不能带 userinfo：空 User 会让 socks5h 拨号
+	// 误走 RFC1929 认证，多数公开代理会直接拒绝。
+	if p.Username != "" {
+		u.User = url.UserPassword(p.Username, p.Password)
+	}
 	tr := &http.Transport{Proxy: http.ProxyURL(u), TLSHandshakeTimeout: 15 * time.Second, DisableKeepAlives: true}
 	return &http.Client{Transport: tr, Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }

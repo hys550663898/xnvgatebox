@@ -485,7 +485,11 @@ func (c *Console) runCheckItem(ctx context.Context, j *CheckRun, index int, item
 			}
 		}
 		if !reused {
-			result = c.probe(ctx, node, slot, progress)
+			if node.Source == "freepool" {
+				result = c.probeFreePoolCandidate(ctx, node, progress)
+			} else {
+				result = c.probe(ctx, node, slot, progress)
+			}
 		}
 	}
 	result.CheckedAt = time.Now().UTC()
