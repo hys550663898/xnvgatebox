@@ -48,8 +48,9 @@ type Node struct {
 	PoolNodeID     string         `json:"pool_node_id,omitempty"`
 	// Source 标记候选来源：空为 VPN Gate，"freepool" 为免费代理池。
 	Source string `json:"source,omitempty"`
-	// SocksHost/SocksPort 仅 freepool 节点使用：抓取到的免费 SOCKS5 地址，
-	// 这类节点没有 OpenVPN 配置，不能直接建隧道。
+	// SocksHost/SocksPort 仅 freepool 节点使用：抓取到的免费 SOCKS5
+	// 上游地址。这类节点没有 OpenVPN 配置，建隧道时本地 SOCKS
+	// 出站经这个上游拨号（见 Tunnel.exitDialer）。
 	SocksHost         string         `json:"socks_host,omitempty"`
 	SocksPort         int            `json:"socks_port,omitempty"`
 	HostName          string         `json:"hostname"`

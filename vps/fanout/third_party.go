@@ -22,8 +22,11 @@ type ThirdPartyProxy struct {
 	City      string `json:"city"`
 	Remark    string `json:"remark"`
 	Subscribe bool   `json:"subscribe"`
-	// Source 为 "freepool" 表示这条记录由免费代理池 promote 生成，
-	// 不是用户在手动区添加的；手动条目恒为空。
+	// Source 为 "freepool" 表示这条记录是 v0.15.0 时期由免费代理池
+	// promote 生成的存量条目；v0.16.0 起免费池改走主出口 Slot，
+	// 不再新建这类条目。字段保留只为存量兼容：落盘重载与既有条目
+	// 的保存仍可按原样通过校验（见 validateThirdPartyForSource），
+	// 手动新建/编辑的条目恒为空。
 	Source string `json:"source,omitempty"`
 }
 
@@ -64,9 +67,10 @@ func validateThirdParty(p ThirdPartyProxy) error {
 	return validateThirdPartyMode(p, true)
 }
 
-// validateThirdPartyForSource 是内部保存/恢复路径用的变体：仅免费池
-// promote 生成的条目（Source == "freepool"，抓取到的公开代理没有凭据）
-// 允许账号密码为空；手动条目与 validateThirdParty 完全一致。
+// validateThirdPartyForSource 是内部保存/恢复路径用的变体：仅存量
+// 免费池条目（Source == "freepool"，v0.15.0 promote 生成，抓取到的
+// 公开代理没有凭据）允许账号密码为空，保证它们升级后落盘重载不
+// 失败；手动条目与 validateThirdParty 完全一致。
 func validateThirdPartyForSource(p ThirdPartyProxy) error {
 	return validateThirdPartyMode(p, p.Source != "freepool")
 }

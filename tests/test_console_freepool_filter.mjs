@@ -12,18 +12,23 @@ assert.match(html, /<option value="vpngate">VPN Gate<\/option>/);
 assert.match(html, /<option value="freepool">免费池<\/option>/);
 assert.match(html, /\$\("sourceFilter"\)\.addEventListener\("change", renderNodes\)/, 'sourceFilter has no change listener');
 
-// Candidate rows badge freepool nodes and give passed freepool rows a
-// direct promote action, separate from the VPN Gate replace dialog.
+// Candidate rows badge freepool nodes. Since v0.16.0 freepool rows use
+// the same replace-dialog action as VPN Gate rows (promoteNode), gated
+// on a passed check; the v0.15.0 direct promote special case is gone.
 assert.match(html, /来源 · 免费池/, 'freepool badge missing from candidate rows');
-assert.match(html, /data-action="promoteFreePool"/, 'freepool promote action missing');
-assert.match(html, /api\("api\/freepool\/promote"/, 'promote action does not call the freepool API');
+assert.match(html, /data-action="promoteNode"/, 'shared promote dialog action missing');
+assert.match(html, /n\.source === "freepool" && r\.status !== "passed"/, 'freepool promote must require a passed check');
+assert.doesNotMatch(html, /promoteFreePool/, 'v0.15.0 freepool promote action still present');
+assert.doesNotMatch(html, /api\/freepool\/promote/, 'v0.15.0 freepool promote API still called');
 
-// FreePool rows are excluded from the manual third-party list but stay
-// visible (labelled) on the exit management cards.
+// Third-party rendering no longer special-cases freepool rows: the
+// manual list shows every entry and managed exit cards use the plain
+// custom-proxy label with an edit button for all entries.
 const thirdSection = section(html, '      function renderThirdParties()', '      async function refreshThirdParties()');
-assert.match(thirdSection, /p\.source !== "freepool"/, 'manual third-party list does not exclude freepool rows');
+assert.doesNotMatch(thirdSection, /source !== "freepool"/, 'manual third-party list still excludes freepool rows');
 const managedSection = section(html, '      function renderManagedExits()', '      function poolRefreshFeedback(');
-assert.match(managedSection, /免费池 · SOCKS5/, 'managed exit cards do not label freepool entries');
+assert.doesNotMatch(managedSection, /免费池 · SOCKS5/, 'managed exit cards still special-label freepool entries');
+assert.match(managedSection, /自定义 · SOCKS5/, 'managed exit cards lost the custom proxy label');
 
 // Source filtering on the candidates page, combined with the existing
 // search / country / status / type filters.

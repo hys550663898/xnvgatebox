@@ -151,9 +151,6 @@ func (m *Manager) Start(node Node) (*Tunnel, error) {
 }
 
 func (m *Manager) StartWithPolicy(node Node, policy SlotPolicy) (*Tunnel, error) {
-	if node.Source == "freepool" {
-		return nil, fmt.Errorf("免费池节点没有 OpenVPN 配置，不能直接建立隧道；请先检测通过，再在候选页点「设为出口」生成独立出口")
-	}
 	policy, err := normalizePolicy(policy)
 	if err != nil {
 		return nil, err
@@ -393,13 +390,21 @@ func (m *Manager) tryNode(t *Tunnel) error {
 	defer release()
 
 	t.clearEgress()
+	// 本次候选已由 claimNode 写入 t.Node。免费池节点没有 OpenVPN
+	// 配置：不建 netns、不拉 openvpn，本地 SOCKS 的出站直接经
+	// 远程 SOCKS5 上游拨号，其余验活步骤与 VPN Gate 完全一致。
+	t.mu.Lock()
+	freePool := t.Node.Source == freePoolSource
+	t.mu.Unlock()
 	t.probePhase("setup")
-	if err := t.setupNetns(); err != nil {
-		return err
-	}
-	t.probePhase("connecting")
-	if err := t.startOpenVPN(m.workDir); err != nil {
-		return err
+	if !freePool {
+		if err := t.setupNetns(); err != nil {
+			return err
+		}
+		t.probePhase("connecting")
+		if err := t.startOpenVPN(m.workDir); err != nil {
+			return err
+		}
 	}
 	if t.listener == nil {
 		if err := t.serve(); err != nil {
@@ -407,11 +412,29 @@ func (m *Manager) tryNode(t *Tunnel) error {
 		}
 	}
 	t.probePhase("baseline")
-	ip, err := t.probeExitIP()
-	if err != nil {
-		return err
+	var ip string
+	if freePool {
+		// 没有 netns 内的基线可测：基线就是经本地 SOCKS（上游拨号）
+		// 测到的出口 IP。本地 SOCKS 只在验证窗口内放行探测连接，
+		// 先开窗口、测完立刻关窗，下面的 verify 阶段会再开一次。
+		t.setValidating(true)
+		probed, perr := t.probeSocksExitIP()
+		t.setValidating(false)
+		if perr != nil {
+			return perr
+		}
+		ip = probed
+	} else {
+		probed, err := t.probeExitIP()
+		if err != nil {
+			return err
+		}
+		ip = probed
 	}
 	if host := hostPublicIP(); host != "" && ip == host {
+		if freePool {
+			return fmt.Errorf("免费池上游未提供独立出口，出口回落到母机公网 IP %s", host)
+		}
 		return fmt.Errorf("OpenVPN 未提供独立出口，namespace 回落到母机公网 IP %s", host)
 	}
 	t.mu.Lock()

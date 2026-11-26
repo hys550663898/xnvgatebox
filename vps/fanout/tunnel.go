@@ -21,7 +21,8 @@ type SocksCred struct {
 	Pass string `json:"pass"`
 }
 
-// Tunnel 是一条运行中的隧道：一个 netns + 一个 openvpn 进程 + 一个本地 SOCKS5 端口。
+// Tunnel 是一条运行中的隧道：一个本地 SOCKS5 端口，背后是
+// netns + openvpn 进程（VPN Gate 节点）或远程 SOCKS5 上游（免费池节点）。
 type Tunnel struct {
 	Slot           int         `json:"slot"`
 	Port           int         `json:"port"`
@@ -335,7 +336,6 @@ func (t *Tunnel) serve() error {
 		return fmt.Errorf("Slot 固定端口 %d 监听失败: %w", t.Port, err)
 	}
 	t.listener = ln
-	dial := dialerInNetns(t.nsName())
 
 	go func() {
 		for {
@@ -360,7 +360,9 @@ func (t *Tunnel) serve() error {
 					if err := ctx.Err(); err != nil {
 						return nil, err
 					}
-					remote, err := dial(network, addr)
+					// 每次连接现选拨号方式：监听在换节点时不重建，
+					// 节点换了（VPN Gate ↔ 免费池）新连接必须立刻走新链路。
+					remote, err := t.exitDialer()(network, addr)
 					if err == nil && ctx.Err() != nil {
 						remote.Close()
 						return nil, ctx.Err()
@@ -371,6 +373,27 @@ func (t *Tunnel) serve() error {
 		}
 	}()
 	return nil
+}
+
+// exitDialer 返回当前绑定节点的出站拨号函数。
+//
+// 不在 serve 启动时定死：监听在换节点时不重建，VPN Gate 与
+// 免费池节点互换后，新连接必须立刻走新节点的链路。每次连接
+// 在锁内读一份 t.Node 再选，避免与换节点写 t.Node 并发竞争。
+func (t *Tunnel) exitDialer() func(network, addr string) (net.Conn, error) {
+	t.mu.Lock()
+	node := t.Node
+	t.mu.Unlock()
+	return exitDialerForNode(node, t.nsName())
+}
+
+// exitDialerForNode 是纯选择逻辑：免费池节点没有 netns/OpenVPN，
+// 出站经它自带的远程 SOCKS5 上游拨号；其余节点走本 Slot 的 netns。
+func exitDialerForNode(node Node, nsName string) func(network, addr string) (net.Conn, error) {
+	if node.Source == freePoolSource {
+		return dialViaSocks5Upstream(node.SocksHost, node.SocksPort)
+	}
+	return dialerInNetns(nsName)
 }
 
 // credential 取一份凭据副本，避免读写并发。

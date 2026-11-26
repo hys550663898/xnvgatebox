@@ -17,8 +17,11 @@ import (
 
 // 免费代理池：从免 key、免登录的公开列表抓取免费 SOCKS5，
 // 作为与 VPN Gate 并列的候选来源并入候选池，一起跑候选检测。
-// 这类节点没有 OpenVPN 配置（Config 恒为空），不能直接建隧道；
-// 检测通过后经 /api/freepool/promote 生成一条独立的第三方形态出口。
+// 这类节点没有 OpenVPN 配置（Config 恒为空），但和 VPN Gate
+// 候选走同一条主出口路径：候选页「设为出口」弹窗选一个已有
+// Slot 替换进来，隧道的本地 SOCKS 出站改为经远程 SOCKS5 上游
+// 拨号（见 dialViaSocks5Upstream 与 Tunnel.exitDialer），端口、
+// 凭据与订阅保持不变；节点失效后按该 Slot 原策略自动换点。
 
 const freePoolSource = "freepool"
 
@@ -249,6 +252,110 @@ func mergeFreePoolEntries(geonode, proxyscrape []freePoolEntry) []Node {
 	return nodes
 }
 
+const socks5UpstreamTimeout = 15 * time.Second
+
+// dialViaSocks5Upstream 返回一个经远程无认证 SOCKS5 上游建立 TCP
+// 连接的拨号函数，供免费池隧道的本地 SOCKS 出站使用。
+//
+// 只报无认证一种方法：公开列表里的免费代理没有凭据，上游若要求
+// 认证就直接失败，不尝试空口令。目标域名原样交给上游解析
+// （ATYP 0x03），本机不做 DNS 解析——既走远程 DNS，也避免本机
+// 解析失败或地址泄漏让连接绕开上游。
+func dialViaSocks5Upstream(host string, port int) func(network, addr string) (net.Conn, error) {
+	return func(network, addr string) (net.Conn, error) {
+		if network != "tcp" && network != "tcp4" && network != "tcp6" {
+			return nil, fmt.Errorf("免费池上游只支持 TCP 连接（%s）", network)
+		}
+		targetHost, targetPortText, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, fmt.Errorf("目标地址无效: %w", err)
+		}
+		targetPort, err := strconv.Atoi(targetPortText)
+		if err != nil || targetPort < 1 || targetPort > 65535 {
+			return nil, fmt.Errorf("目标地址端口无效: %s", addr)
+		}
+		dialer := net.Dialer{Timeout: socks5UpstreamTimeout}
+		conn, err := dialer.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+		if err != nil {
+			return nil, err
+		}
+		if err := socks5UpstreamHandshake(conn, targetHost, targetPort); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return conn, nil
+	}
+}
+
+// socks5UpstreamHandshake 在已连上的上游连接上跑 SOCKS5 方法协商
+// 与 CONNECT；成功返回时连接已可直接转发，握手期截止时间随之清除。
+func socks5UpstreamHandshake(conn net.Conn, host string, port int) error {
+	_ = conn.SetDeadline(time.Now().Add(socks5UpstreamTimeout))
+	defer func() { _ = conn.SetDeadline(time.Time{}) }()
+	if _, err := conn.Write([]byte{socksVer5, 1, authNone}); err != nil {
+		return fmt.Errorf("向上游发送 SOCKS5 握手失败: %w", err)
+	}
+	method := make([]byte, 2)
+	if _, err := io.ReadFull(conn, method); err != nil {
+		return fmt.Errorf("读取上游 SOCKS5 握手回复失败: %w", err)
+	}
+	if method[0] != socksVer5 {
+		return fmt.Errorf("上游 SOCKS5 版本异常: 0x%02x", method[0])
+	}
+	if method[1] != authNone {
+		return fmt.Errorf("上游 SOCKS5 要求认证（方法 0x%02x），免费池只支持无认证上游", method[1])
+	}
+	req := []byte{socksVer5, cmdConnect, 0x00}
+	if ip := net.ParseIP(host); ip != nil {
+		if v4 := ip.To4(); v4 != nil {
+			req = append(req, atypIPv4)
+			req = append(req, v4...)
+		} else {
+			req = append(req, atypIPv6)
+			req = append(req, ip.To16()...)
+		}
+	} else {
+		if len(host) == 0 || len(host) > 255 {
+			return fmt.Errorf("目标域名长度无效: %q", host)
+		}
+		req = append(req, atypDomain, byte(len(host)))
+		req = append(req, host...)
+	}
+	req = append(req, byte(port>>8), byte(port))
+	if _, err := conn.Write(req); err != nil {
+		return fmt.Errorf("向上游发送 CONNECT 失败: %w", err)
+	}
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(conn, head); err != nil {
+		return fmt.Errorf("读取上游 CONNECT 回复失败: %w", err)
+	}
+	if head[0] != socksVer5 {
+		return fmt.Errorf("上游 CONNECT 回复版本异常: 0x%02x", head[0])
+	}
+	if head[1] != repSuccess {
+		return fmt.Errorf("上游 SOCKS5 拒绝连接（回复码 0x%02x）", head[1])
+	}
+	var boundLen int
+	switch head[3] {
+	case atypIPv4:
+		boundLen = 4
+	case atypIPv6:
+		boundLen = 16
+	case atypDomain:
+		lenByte := make([]byte, 1)
+		if _, err := io.ReadFull(conn, lenByte); err != nil {
+			return fmt.Errorf("读取上游绑定地址失败: %w", err)
+		}
+		boundLen = int(lenByte[0])
+	default:
+		return fmt.Errorf("上游 CONNECT 回复地址类型异常: 0x%02x", head[3])
+	}
+	if _, err := io.ReadFull(conn, make([]byte, boundLen+2)); err != nil {
+		return fmt.Errorf("读取上游绑定地址失败: %w", err)
+	}
+	return nil
+}
+
 // probeFreePoolCandidate 检测一个免费池候选：它本质上是一个无凭据
 // SOCKS5，直接复用第三方 SOCKS5 的探测管线（双 HTTPS 回显一致 +
 // 内容校验 + 出口画像 + iptest），结果映射回候选的 CheckResult。
@@ -283,91 +390,4 @@ func freePoolCheckResult(node Node, rec ThirdPartyRecord) CheckResult {
 		result.IPType = "unknown"
 	}
 	return result
-}
-
-func (c *Console) realityServerName() string {
-	c.targetMu.Lock()
-	defer c.targetMu.Unlock()
-	if c.plan != nil && c.plan.ServerName != "" {
-		return c.plan.ServerName
-	}
-	return "www.tesla.com"
-}
-
-// findFreePoolThirdParty 按上游地址找已 promote 的免费池出口，做幂等判断。
-func (n *Native) findFreePoolThirdParty(host string, port int) (int, bool) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	for _, ib := range n.store.Inbounds {
-		if thirdPartyBound(ib) && ib.ThirdParty.Source == freePoolSource && ib.ThirdParty.Host == host && ib.ThirdParty.Port == port {
-			return ib.ID, true
-		}
-	}
-	return 0, false
-}
-
-// apiFreePoolPromote 把检测通过的免费池候选生成为一条独立出口
-// （第三方形态入站，Source="freepool"，无凭据，默认加入订阅）。
-// 重复调用同一 host 幂等：返回已存在的出口编号，不重复创建。
-func (c *Console) apiFreePoolPromote(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	var req struct {
-		Host string `json:"host"`
-	}
-	if err := readConsoleJSON(w, r, &req); err != nil {
-		writeJSON(w, 400, map[string]string{"error": err.Error()})
-		return
-	}
-	host := strings.TrimSpace(req.Host)
-	nodes, _ := c.m.Nodes()
-	var node *Node
-	for i := range nodes {
-		if nodes[i].HostName == host {
-			node = &nodes[i]
-			break
-		}
-	}
-	if node == nil || node.Source != freePoolSource {
-		writeJSON(w, 404, map[string]string{"error": "候选不存在或不是免费池节点，请刷新候选列表"})
-		return
-	}
-	c.checksMu.Lock()
-	result, ok := c.results[host]
-	c.checksMu.Unlock()
-	if !ok || result.Status != "passed" {
-		writeJSON(w, 409, map[string]string{"error": "该节点尚未检测通过，不能设为出口"})
-		return
-	}
-	// 与候选列表的过期口径一致：配置摘要变化或超过 15 分钟视为过期。
-	if result.ProfileSHA != profileDigest(node.Config) || time.Since(result.CheckedAt) > 15*time.Minute {
-		writeJSON(w, 409, map[string]string{"error": "检测结果已过期，请重新检测后再设为出口"})
-		return
-	}
-	n := thirdPartyNative(w)
-	if n == nil {
-		return
-	}
-	if id, exists := n.findFreePoolThirdParty(node.SocksHost, node.SocksPort); exists {
-		writeJSON(w, 200, map[string]any{"id": id, "ok": true, "existing": true})
-		return
-	}
-	label := result.Country
-	if label == "" {
-		label = host
-	}
-	p := ThirdPartyProxy{
-		Host:      node.SocksHost,
-		Port:      node.SocksPort,
-		Country:   result.Country,
-		Remark:    "免费池 · " + label,
-		Subscribe: true,
-		Source:    freePoolSource,
-	}
-	id, err := n.saveThirdParty(0, p, true, c.realityServerName(), c.m.Tunnels())
-	if err != nil {
-		writeJSON(w, 409, map[string]string{"error": err.Error()})
-		return
-	}
-	invalidateInbounds()
-	writeJSON(w, 200, map[string]any{"id": id, "ok": true})
 }

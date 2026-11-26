@@ -270,8 +270,10 @@ func (s *ThirdPartyManager) apiResources(w http.ResponseWriter, r *http.Request)
 		req.Password = ib.ThirdParty.Password
 	}
 	p := cleanThirdParty(req.ThirdPartyProxy)
-	// 手动区条目的来源恒为空：不接受请求自带 freepool 标记绕过凭据校验，
-	// freepool 条目只能由候选页 promote 内部生成。
+	// 手动区条目的来源恒为空：不接受请求自带 freepool 标记绕过凭据校验。
+	// 带 freepool 标记的条目是 v0.15.0 promote 的存量（v0.16.0 起已无
+	// 新建入口），只能经内部路径按原样保存/恢复，手动编辑会把它
+	// 转成普通条目并按手动规则要求凭据。
 	p.Source = ""
 	if err := validateThirdParty(p); err != nil {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})

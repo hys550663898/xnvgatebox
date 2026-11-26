@@ -1185,7 +1185,7 @@
           <div class="notice">
             清单数量是本次来源返回并经格式校验的候选数量，可能随时间变化。未测试不等于不可用；来源地区与实际出口地区分开展示。检测会建立临时连接并核验
             HTTPS
-            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。点候选行的「设为出口」，在弹窗里选一个已有出口替换成该节点：端口、凭据和订阅不变，替换后自动重连，就绪后订阅里就是新节点。检测通过后还会按出口 IP 到 iptest.us 查询网络类型与综合评分（评分越低越纯净），显示在节点域名下方；查询失败不影响检测结果。筛选栏可按网络类型（优质网络 / VPN / 代理）过滤，未检测或未取得 IP 信息的节点不计入该筛选。出口管理页的出口卡片在点过该出口的「检测」后，也会在 IP 下方显示同一行信息。标有「免费池」的候选是从公开列表抓取的免费 SOCKS5（可在来源筛选里单独看），与 VPN Gate 节点一起检测；检测通过后点它那行的「设为出口」，会直接生成一个独立出口并加入订阅，不占用 VPN Gate 出口数量。免费代理质量参差、随时可能失效，不要拿它登录重要账号。
+            出口。快速端口预检不代表出口可用；无需测完全部候选才能使用订阅。点候选行的「设为出口」，在弹窗里选一个已有出口替换成该节点：端口、凭据和订阅不变，替换后自动重连，就绪后订阅里就是新节点。检测通过后还会按出口 IP 到 iptest.us 查询网络类型与综合评分（评分越低越纯净），显示在节点域名下方；查询失败不影响检测结果。筛选栏可按网络类型（优质网络 / VPN / 代理）过滤，未检测或未取得 IP 信息的节点不计入该筛选。出口管理页的出口卡片在点过该出口的「检测」后，也会在 IP 下方显示同一行信息。标有「免费池」的候选是从公开列表抓取的免费 SOCKS5（可在来源筛选里单独看），与 VPN Gate 节点一起检测；检测通过后同样点「设为出口」在弹窗里选一个已有出口替换，端口、凭据和订阅不变，节点失效后会按该出口的原策略自动换回其他节点。免费代理质量参差、随时可能失效，不要拿它登录重要账号。
           </div>
           <div id="poolSourceSummary" class="notice"></div>
           <div id="automationSummary" class="notice"></div>
@@ -2317,7 +2317,7 @@
               const r = thirdSubmitting.has(p.id) ? { status: "running" } : p.check || { status: "not_tested" };
               const place = r.country ? country(r.country) + (r.city ? " · " + r.city : "") : "实际地区待验证";
               return '<article class="card exit"><div class="exithead"><div><h2>' + esc(p.name) +
-                '</h2><small>' + (p.source === "freepool" ? "免费池 · SOCKS5" : "自定义 · SOCKS5") + '</small></div><span class="badge">' + (p.enabled ? "已启用" : "已停用") +
+                '</h2><small>自定义 · SOCKS5</small></div><span class="badge">' + (p.enabled ? "已启用" : "已停用") +
                 '</span></div><small>最近实测出口</small><div class="ip">' + esc(r.actual_ip || "待检测") +
                 '</div>' + thirdIPTestLine(p, r) + '<small>' + esc(place) + ' · ' + esc(types[r.ip_type] || types.unknown) +
                 '</small>' + (p.country_mismatch || p.city_mismatch ? '<small class="warn">实测地区与手动标注不同</small>' : '') +
@@ -2327,7 +2327,7 @@
                 date(r.checked_at) + '</small><small>' + esc(thirdCheckReason(r.code)) +
                 '</small><div class="exitfoot"><small>与代理资源同步 · 故障不切换</small><div class="actions"><button data-third-check="' + p.id + '" ' +
                 (r.status === "running" ? 'disabled aria-busy="true"' : '') + '>' + checkButtonLabel(r) +
-                '</button>' + (p.source === "freepool" ? '' : '<button data-third-edit="' + p.id + '">编辑</button>') + '<button data-third-toggle="' + p.id + '">' +
+                '</button><button data-third-edit="' + p.id + '">编辑</button><button data-third-toggle="' + p.id + '">' +
                 (p.enabled ? "停用" : "启用") + '</button></div></div></article>';
             }).join("")
           : '<div class="card empty">尚未添加自定义代理，可在“代理资源 → 第三方 SOCKS5”中添加。</div>';
@@ -2680,14 +2680,10 @@
                   ">" +
                   checkButtonLabel(r) +
                   "</button> " +
-                  (n.source === "freepool"
-                    ? r.status === "passed"
-                      ? '<button data-action="promoteFreePool" data-host="' +
-                        esc(n.hostname) +
-                        '">设为出口</button>'
-                      : "<button disabled>设为出口</button>"
-                    : inUse
-                      ? "<button disabled>已是出口</button>"
+                  (inUse
+                    ? "<button disabled>已是出口</button>"
+                    : n.source === "freepool" && r.status !== "passed"
+                      ? "<button disabled>设为出口</button>"
                       : '<button data-action="promoteNode" data-host="' +
                         esc(n.hostname) +
                         '">设为出口</button>') +
@@ -2806,13 +2802,9 @@
         }
       }
       function renderThirdParties() {
-        // 免费池 promote 的条目不进手动区：它们在出口管理页展示，
-        // 不能按手动代理的方式编辑凭据。
-        const manual = orderedThirdParties().filter(
-          (p) => p.source !== "freepool",
-        );
-        $("thirdRows").innerHTML = manual.length
-          ? manual
+        const all = orderedThirdParties();
+        $("thirdRows").innerHTML = all.length
+          ? all
               .map((p) => {
                 const r = thirdSubmitting.has(p.id)
                   ? { status: "running" }
@@ -3851,17 +3843,6 @@
           if (a === "testNode")
             await check({ hosts: [b.dataset.host], priority: true });
           if (a === "promoteNode") openPromote(b.dataset.host);
-          if (a === "promoteFreePool") {
-            const made = await api("api/freepool/promote", {
-              host: b.dataset.host,
-            });
-            toast(
-              made.existing
-                ? "该免费池节点已经是出口"
-                : "已生成出口，可在出口管理页查看",
-            );
-            await poll();
-          }
           if (a === "cancelCheck") {
             await api("api/console/check/cancel", {});
             toast("正在取消并清理临时连接");

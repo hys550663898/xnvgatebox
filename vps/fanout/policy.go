@@ -206,8 +206,11 @@ func (m *Manager) policyCandidates(p SlotPolicy, avoid map[string]bool, exceptSl
 		if n.HostName == "" || used[n.HostName] || avoid[n.HostName] {
 			continue
 		}
-		// 免费池节点没有 OpenVPN 配置，永远不能被自动选点拿去建隧道；
-		// 它们成为出口的唯一路径是候选页检测通过后 promote。
+		// 免费池节点永远不能被自动选点/自动补位挑中：它们成为出口
+		// 的唯一路径是用户在候选页手动「设为出口」替换已有 Slot。
+		// 已绑定的免费池节点掉线后，备选自然落到这里的 VPN Gate
+		// 候选——替换不是钉死（原节点本身由 candidatesFor 打头重试，
+		// 不经过这里的过滤）。
 		if n.Source == "freepool" {
 			continue
 		}

@@ -18,6 +18,13 @@ type persistedTunnel struct {
 	CountryCode string `json:"country_code"`
 	Country     string `json:"country"`
 	Config      string `json:"config"`
+	// Source/Socks* 只有免费池节点用：VPN Gate 节点靠 Config 就能
+	// 重建，免费池节点没有配置，必须把上游地址一并存盘，节点掉出
+	// 候选列表后才能按原上游恢复。旧状态文件没有这三个字段，
+	// 解码时为空，与 VPN Gate 节点一致。
+	Source    string `json:"source,omitempty"`
+	SocksHost string `json:"socks_host,omitempty"`
+	SocksPort int    `json:"socks_port,omitempty"`
 	// SOCKS5 凭据要存盘：用户已经把它分发给客户端了，重启后变掉等于全断
 	SocksUser string `json:"socks_user,omitempty"`
 	SocksPass string `json:"socks_pass,omitempty"`
@@ -62,6 +69,9 @@ func (m *Manager) saveState() error {
 			CountryCode:    t.Node.CountryCode,
 			Country:        t.Node.Country,
 			Config:         t.Node.Config,
+			Source:         t.Node.Source,
+			SocksHost:      t.Node.SocksHost,
+			SocksPort:      t.Node.SocksPort,
 			SocksUser:      t.Cred.User,
 			SocksPass:      t.Cred.Pass,
 			PrevHost:       t.prevHost,
@@ -213,11 +223,14 @@ func prepareRestoredTunnelsWithCred(st *persistedState, nodes []Node, gen func()
 	for _, p := range st.Tunnels {
 		node, ok := known[p.HostName]
 		if !ok {
-			// 节点已从 VPN Gate 列表消失，用存盘的信息重建
+			// 节点已从候选列表消失，用存盘的信息重建
 			node = Node{
 				HostName:    p.HostName,
 				CountryCode: p.CountryCode,
 				Country:     p.Country,
+				Source:      p.Source,
+				SocksHost:   p.SocksHost,
+				SocksPort:   p.SocksPort,
 			}
 		}
 		// Prefer the current shared-pool profile when the node has changed IP
