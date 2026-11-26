@@ -378,6 +378,23 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+class _BigHealthHandler(_HealthHandler):
+    """Console response larger than the probe's old 1 MB read cap:
+    a big candidate pool (free-pool merge) plus stored check results
+    pushes /api/console past 1 MB, and the truncated JSON used to fail
+    every health check and roll back healthy updates."""
+
+    def do_GET(self):
+        if self.path == '/synthetic-base/api/console':
+            body = json.dumps({'version': 'v-test', 'pad': 'x' * (2 * 1024 * 1024)}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            super().do_GET()
+
+
 class _ActiveRunner:
     def active(self, unit): return True
 
@@ -430,6 +447,13 @@ class HealthSchemeTests(unittest.TestCase):
 
     def test_health_over_https(self):
         self.installer(self.serve(True), True).health('v-test')
+
+    def test_health_with_oversized_console_response(self):
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), _BigHealthHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.installer(server.server_address[1], False).health('v-test')
 
 
 if __name__ == '__main__': unittest.main()

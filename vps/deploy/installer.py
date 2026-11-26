@@ -26,6 +26,20 @@ MESSAGES = {'preparing':'准备更新', 'dependencies':'准备系统依赖', 'do
             'health':'验证新版本服务', 'rollback':'恢复原有部署', 'complete':'更新完成',
             'failed':'更新失败，原部署保持或已恢复', 'recovery_required':'恢复未完成，请重新运行安装入口'}
 
+def read_body_capped(response, limit=64 * 1024 * 1024):
+    # The management API is a local trusted service, but keep a sanity
+    # bound. The old 1 MB cap silently truncated /api/console once the
+    # candidate pool (plus free-pool entries and their check results)
+    # pushed the response past 1 MB: the truncated JSON never parsed,
+    # so the health probe retried until its deadline and every update
+    # rolled back. Read the real body; fail loudly past the cap
+    # instead of parsing a truncated prefix.
+    data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError('response_too_large')
+    return data
+
+
 def atomic_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name('.' + path.name + '-' + str(os.getpid()))
@@ -286,10 +300,10 @@ class Installer:
                 response=conn.getresponse();response.read();cookie=response.getheader('Set-Cookie','').split(';')[0]
                 if not cookie:raise ValueError('login_not_ready')
                 conn.request('GET',base+'/api/console',headers={'Cookie':cookie})
-                response=conn.getresponse();data=response.read(1000000)
+                response=conn.getresponse();data=read_body_capped(response)
                 if response.status==200 and json.loads(data).get('version')==expected:
                     conn.request('GET',base+'/api/exits',headers={'Cookie':cookie})
-                    response=conn.getresponse();view=json.loads(response.read(1000000))
+                    response=conn.getresponse();view=json.loads(read_body_capped(response))
                     if response.status==200 and view.get('backend')=='native' and not view.get('panel'):return
             except (OSError,ValueError,KeyError,http.client.HTTPException):pass
             finally:
@@ -311,7 +325,7 @@ class Installer:
             if not cookie:raise RuntimeError('initial_direct_login_failed')
             conn.request('POST',base+'/api/console/direct','{"enabled":true}',
                          {'Cookie':cookie,'Content-Type':'application/json'})
-            response=conn.getresponse();data=json.loads(response.read(1000000))
+            response=conn.getresponse();data=json.loads(read_body_capped(response))
             if response.status!=200 or data.get('ok') is not True:
                 raise RuntimeError('initial_direct_failed')
         finally:
