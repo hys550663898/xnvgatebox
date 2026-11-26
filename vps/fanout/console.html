@@ -1647,6 +1647,8 @@
         <div class="dialoghead"><h2 id="sourceTitle">候选来源设置</h2><button type="button" data-close="sourceDialog" aria-label="关闭">×</button></div>
         <p>所有清单获取和节点检测都由本 VPS 执行。先尝试当前配置来源；启用后，仅在失败时请求第三方镜像原始 CSV。</p>
         <label class="choice"><input id="sourceMirrorEnabled" type="checkbox" />允许第三方镜像后备（默认开启，可关闭）</label>
+        <label class="choice"><input id="sourceFreePoolEnabled" type="checkbox" />获取免费代理池（默认开启，可关闭）</label>
+        <p class="muted">免费池从 ProxyScrape 与 Geonode 的免费列表抓取公开 SOCKS5（免登录），与 VPN Gate 一起进候选池并一起检测。关闭后下次刷新不再抓取，已在列表里的免费池候选会在下次刷新时消失；已被替换成出口的 Slot 不受影响。</p>
         <p class="muted">镜像提供者：<a href="https://github.com/GeorgeXie2333/vpngate-list-mirror" target="_blank" rel="noopener noreferrer">GeorgeXie2333/vpngate-list-mirror</a>，非官方。只使用原始候选，不采用对方的检测结论；文件摘要不等于官方来源认证。</p>
         <div class="field"><label for="sourceTimeout">每次来源请求最长等待（秒）</label><input id="sourceTimeout" type="number" min="2" max="20" step="1" required /></div>
         <div class="field"><label for="sourceMirrorMaxAge">镜像声明抓取时间的最大年龄（小时）</label><input id="sourceMirrorMaxAge" type="number" min="1" max="168" step="1" required /><small>默认 24 小时；超过 3 小时会提示较旧。摘要、时间或格式校验失败时保留旧清单。节点仍需本 VPS 建连验证。</small></div>
@@ -3597,6 +3599,7 @@
         try {
           const s = await api("api/console/source-settings");
           $("sourceMirrorEnabled").checked = s.mirror_enabled === true;
+          $("sourceFreePoolEnabled").checked = s.freepool_enabled !== false;
           $("sourceTimeout").value = s.source_timeout_seconds;
           $("sourceMirrorMaxAge").value = s.mirror_max_age_hours;
           $("sourceDialog").showModal();
@@ -3613,7 +3616,7 @@
           if (!Number.isSafeInteger(timeout) || timeout < 2 || timeout > 20 || !Number.isSafeInteger(age) || age < 1 || age > 168) throw Error("请填写有效的来源等待和镜像最大年龄");
           sourceSettingsSaving = true;
           try {
-            await api("api/console/source-settings", {mirror_enabled: $("sourceMirrorEnabled").checked, source_timeout_seconds: timeout, mirror_max_age_hours: age});
+            await api("api/console/source-settings", {mirror_enabled: $("sourceMirrorEnabled").checked, source_timeout_seconds: timeout, mirror_max_age_hours: age, freepool_enabled: $("sourceFreePoolEnabled").checked});
             $("sourceDialog").close();
             toast("来源设置已保存，下次刷新生效");
           } finally {

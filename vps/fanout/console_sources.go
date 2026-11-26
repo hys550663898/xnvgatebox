@@ -10,17 +10,19 @@ import (
 )
 
 const poolMirrorProvider = "GeorgeXie2333/vpngate-list-mirror"
+
 var poolDataCommitPattern = regexp.MustCompile(`^[a-f0-9]{40}$`)
 
 type poolSourceOptions struct {
-	MirrorEnabled bool `json:"mirror_enabled"`
-	SourceTimeout int `json:"source_timeout_seconds"`
-	MirrorMaxAgeHours int `json:"mirror_max_age_hours"`
+	MirrorEnabled     bool `json:"mirror_enabled"`
+	SourceTimeout     int  `json:"source_timeout_seconds"`
+	MirrorMaxAgeHours int  `json:"mirror_max_age_hours"`
+	FreePoolEnabled   bool `json:"freepool_enabled"`
 }
 
 type poolMirrorOptions struct {
-	Enabled bool `json:"enabled"`
-	MaxAgeHours int `json:"max_age_hours"`
+	Enabled     bool `json:"enabled"`
+	MaxAgeHours int  `json:"max_age_hours"`
 }
 
 func validSourceOptions(s poolSourceOptions) bool {
@@ -28,7 +30,7 @@ func validSourceOptions(s poolSourceOptions) bool {
 }
 
 func readSourceOptions(path string) (poolSourceOptions, map[string]json.RawMessage, error) {
-	s := poolSourceOptions{MirrorEnabled: true, SourceTimeout: 10, MirrorMaxAgeHours: 24}
+	s := poolSourceOptions{MirrorEnabled: true, SourceTimeout: 10, MirrorMaxAgeHours: 24, FreePoolEnabled: true}
 	blob, err := os.ReadFile(path)
 	var fields map[string]json.RawMessage
 	if err != nil || len(blob) > 1<<20 || json.Unmarshal(blob, &fields) != nil || fields == nil {
@@ -36,6 +38,14 @@ func readSourceOptions(path string) (poolSourceOptions, map[string]json.RawMessa
 	}
 	if raw, ok := fields["pool_source_timeout_seconds"]; ok && json.Unmarshal(raw, &s.SourceTimeout) != nil {
 		return s, nil, fmt.Errorf("来源等待设置无效")
+	}
+	// 免费池开关与 freePoolEnabled() 同一口径：字段是 bool 才采纳，
+	// 缺失或类型不对都按默认开启处理，不让手改坏的字段卡住整个来源设置。
+	if raw, ok := fields["freepool_enabled"]; ok {
+		var v bool
+		if json.Unmarshal(raw, &v) == nil {
+			s.FreePoolEnabled = v
+		}
 	}
 	if raw, ok := fields["mirror_fallback"]; ok {
 		m := poolMirrorOptions{MaxAgeHours: 24}
@@ -56,9 +66,11 @@ func (c *Console) apiSourceSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		MirrorEnabled *bool `json:"mirror_enabled"`
-		SourceTimeout *int `json:"source_timeout_seconds"`
-		MirrorMaxAgeHours *int `json:"mirror_max_age_hours"`
+		MirrorEnabled     *bool `json:"mirror_enabled"`
+		SourceTimeout     *int  `json:"source_timeout_seconds"`
+		MirrorMaxAgeHours *int  `json:"mirror_max_age_hours"`
+		// 免费池开关可选：不带这个字段的旧客户端不改变现有开关状态。
+		FreePoolEnabled *bool `json:"freepool_enabled"`
 	}
 	if r.Method == http.MethodPost && (readConsoleJSON(w, r, &req) != nil || req.MirrorEnabled == nil || req.SourceTimeout == nil || req.MirrorMaxAgeHours == nil) {
 		writeJSON(w, 400, map[string]string{"error": "需要明确设置来源等待与镜像开关/年龄"})
@@ -77,12 +89,17 @@ func (c *Console) apiSourceSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPost {
-		s = poolSourceOptions{*req.MirrorEnabled, *req.SourceTimeout, *req.MirrorMaxAgeHours}
+		freePool := s.FreePoolEnabled
+		if req.FreePoolEnabled != nil {
+			freePool = *req.FreePoolEnabled
+		}
+		s = poolSourceOptions{*req.MirrorEnabled, *req.SourceTimeout, *req.MirrorMaxAgeHours, freePool}
 		if !validSourceOptions(s) {
 			writeJSON(w, 400, map[string]string{"error": "来源等待应为 2–20 秒，镜像最大年龄应为 1–168 小时"})
 			return
 		}
 		fields["pool_source_timeout_seconds"], _ = json.Marshal(s.SourceTimeout)
+		fields["freepool_enabled"], _ = json.Marshal(s.FreePoolEnabled)
 		mirrorFields := map[string]json.RawMessage{}
 		if raw, ok := fields["mirror_fallback"]; ok {
 			_ = json.Unmarshal(raw, &mirrorFields)
@@ -101,24 +118,24 @@ func (c *Console) apiSourceSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 type poolSourceMetadata struct {
-	Kind string `json:"kind"`
-	Retrieval string `json:"retrieval"`
-	RetrievedAt string `json:"retrieved_at"`
-	MirrorProvider string `json:"mirror_provider"`
+	Kind              string `json:"kind"`
+	Retrieval         string `json:"retrieval"`
+	RetrievedAt       string `json:"retrieved_at"`
+	MirrorProvider    string `json:"mirror_provider"`
 	SnapshotFetchedAt string `json:"snapshot_fetched_at"`
-	DataCommit string `json:"data_commit"`
-	IntegrityVerified bool `json:"integrity_verified"`
-	RejectedRows int `json:"rejected_rows"`
+	DataCommit        string `json:"data_commit"`
+	IntegrityVerified bool   `json:"integrity_verified"`
+	RejectedRows      int    `json:"rejected_rows"`
 }
 
 type poolSourceView struct {
-	Kind string `json:"kind"`
-	Label string `json:"label"`
-	RetrievedAt string `json:"retrieved_at"`
+	Kind              string `json:"kind"`
+	Label             string `json:"label"`
+	RetrievedAt       string `json:"retrieved_at"`
 	SnapshotFetchedAt string `json:"snapshot_fetched_at"`
-	DataCommit string `json:"data_commit"`
-	Stale bool `json:"stale"`
-	IntegrityVerified bool `json:"integrity_verified"`
+	DataCommit        string `json:"data_commit"`
+	Stale             bool   `json:"stale"`
+	IntegrityVerified bool   `json:"integrity_verified"`
 }
 
 func publicPoolSource(s poolSourceMetadata) poolSourceView {

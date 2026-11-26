@@ -80,23 +80,29 @@ sourceText = sourceTextContext.poolSourceText({kind:'mirror',label:'第三方镜
 assert.match(sourceText,/local-now/); assert.match(sourceText,/older-snapshot/); assert.match(sourceText,/快照较旧/);
 assert.match(sourceText,/文件完整性/); assert.match(sourceText,/本 VPS 建连/); assert.doesNotMatch(sourceText,/检测通过/);
 
-const sourceElements = Object.fromEntries(['sourceDialog','sourceMirrorEnabled','sourceTimeout','sourceMirrorMaxAge','sourceSettingsButton','sourceForm','saveSourceSettings'].map(id=>[id,{}]));
+const sourceElements = Object.fromEntries(['sourceDialog','sourceMirrorEnabled','sourceFreePoolEnabled','sourceTimeout','sourceMirrorMaxAge','sourceSettingsButton','sourceForm','saveSourceSettings'].map(id=>[id,{}]));
 sourceElements.sourceDialog.showModal=function(){this.open=true;};
 sourceElements.sourceDialog.close=function(){this.open=false;};
-let sourceTask, savedSource, sourcePreference = false;
+let sourceTask, savedSource, sourcePreference = false, freePoolPreference;
 const sourceContext = vm.createContext({sourceSettingsLoading:false,sourceSettingsSaving:false,$:id=>sourceElements[id],toast(){},
   action(fn){sourceTask=fn();return sourceTask;}, async api(path,body){
     assert.equal(path,'api/console/source-settings');
     if(body!==undefined){savedSource=body;return body;}
-    return {mirror_enabled:sourcePreference,source_timeout_seconds:10,mirror_max_age_hours:24};
+    const view = {mirror_enabled:sourcePreference,source_timeout_seconds:10,mirror_max_age_hours:24};
+    if(freePoolPreference!==undefined) view.freepool_enabled=freePoolPreference;
+    return view;
   }});
 vm.runInContext(section(html,'      async function openSourceSettings()', '      async function refreshPool()'),sourceContext);
 await sourceContext.openSourceSettings();
 assert.equal(sourceElements.sourceMirrorEnabled.checked,false,'saved disabled choice overwritten');
+assert.equal(sourceElements.sourceFreePoolEnabled.checked,true,'freepool default-on not displayed when field absent');
 sourceElements.sourceMirrorEnabled.checked=true;
+sourceElements.sourceFreePoolEnabled.checked=false;
 sourceElements.sourceForm.onsubmit({preventDefault(){}});await sourceTask;
 assert.equal(savedSource.mirror_enabled,true); assert.equal(savedSource.source_timeout_seconds,10);
-assert.equal(savedSource.mirror_max_age_hours,24);assert.equal(Object.keys(savedSource).length,3,'unrelated settings submitted');
-sourcePreference = true;
+assert.equal(savedSource.mirror_max_age_hours,24);assert.equal(savedSource.freepool_enabled,false,'freepool switch not submitted');
+assert.equal(Object.keys(savedSource).length,4,'unrelated settings submitted');
+sourcePreference = true; freePoolPreference = false;
 await sourceContext.openSourceSettings();
 assert.equal(sourceElements.sourceMirrorEnabled.checked,true,'server default not displayed');
+assert.equal(sourceElements.sourceFreePoolEnabled.checked,false,'saved freepool disabled choice overwritten');
